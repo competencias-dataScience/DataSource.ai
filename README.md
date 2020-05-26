@@ -1,7 +1,7 @@
 # [DataSource.ai](https://www.datasource.ai/)
 
 <center>
-<img src = "img/readme.png" />
+<img src = "img/readme.PNG" />
 </center>
 
 - Este repositorio es para desarrollos de Machine Learning en competencias de Data Science en latinoamérica. **Lista de competencias en las cuales participo o participé en algún momento:**

@@ -1,0 +1,192 @@
+---
+title: "Retrasos de vuelos"
+subtitle: "Análisis Exploratorio"
+author: "Edimer (*Sidereus*)"
+output:
+  html_notebook:
+    code_folding: hide
+    df_print: paged
+    css: estilo.css
+    toc: true
+    toc_float:
+      smooth_scroll: false
+      collapsed: false
+    highlight: breezedark
+    
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = TRUE,
+                      fig.align = "center",
+                      fig.width = 9,
+                      warning = FALSE,
+                      message = FALSE)
+```
+
+<center>
+<img src = "img/img1.png" />
+</center>
+
+# Reto
+
+- [Reto en DataSource.ai](https://www.datasource.ai/es/home/competitions/prediccion-de-retrasos-de-vuelos-para-una-aerolinea)
+
+# Datos
+
+```{r}
+library(data.table)
+dataTrain <- fread("../data/train.csv")
+dataTest <- fread("../data/test.csv")
+dataSample <- fread("../data/sample.csv")
+```
+
+# Variables
+
+- **ID:** identificación de vuelo.
+- **DATOP:** Fecha de vuelo.
+- **FLTID:** Número de vuelo
+- **DEPSTN:** Punto de partida
+- **ARRSTN:** Punto de llegada
+- **STD:** Hora de salida programada
+- **STA:** Hora prevista de llegada
+- **STATUS:** Estado del vuelo
+- **AC:** Código de aeronave
+- **target:** Tiempo de retraso
+
+# Train y Test
+
+- **Train:**
+  - En el conjunto de datos de *train* hay 107833 vuelos registrados.
+  - El rango de fechas de vuelos es desde el 01-01-2016 hasta 31-12-2018.
+  - Hay 1861 vuelos registrados. Cada vuelo puede estar registrado en diferentes fechas.
+  - En total son 132 puntos de destino diferentes y 128 puntos de llegada.
+  - Hay en total 5 estados (*STATUS*) de vuelo.
+  - Hay 68 códigos de aeronaves diferentes.
+  - El tiempo de retraso (*target*) está dado en minutos.
+
+```{r}
+library(tidyverse)
+# Train
+dataTrain %>% 
+  mutate(DATOP = as.Date(DATOP),
+         FLTID = as.factor(FLTID),
+         DEPSTN = as.factor(DEPSTN),
+         ARRSTN = as.factor(ARRSTN),
+         STD = as.POSIXct(STD),
+         STA = gsub("\\.", ":", STA),
+         STA = as.POSIXct(STA),
+         STATUS = as.factor(STATUS),
+         AC = as.factor(AC)) ->
+  dataTrain
+head(dataTrain, n = 10L)
+```
+
+- **Test:**
+  - En el conjunto de *test* hay 9333 vuelos registrados.
+  - El rango de fechas de vuelos es desde 01-05-2016 hasta 20-09-2018.
+  - Hay 700 vuelos registrados.
+  - En total son 82 puntos de destino y 84 puntos de llegada diferentes.
+  - Los mismos 5 estados de vuelo.
+  - Hay 44 códigos de aeronaves.
+
+```{r}
+# Test
+dataTest %>% 
+  mutate(DATOP = as.Date(DATOP),
+         FLTID = as.factor(FLTID),
+         DEPSTN = as.factor(DEPSTN),
+         ARRSTN = as.factor(ARRSTN),
+         STD = as.POSIXct(STD),
+         STA = gsub("\\.", ":", STA),
+         STA = as.POSIXct(STA),
+         STATUS = as.factor(STATUS),
+         AC = as.factor(AC)) ->
+  dataTest
+head(dataTest, n = 10L)
+```
+
+
+# Conteos
+
+- **¿Cuántos vuelos (*FLTID*) del test coinciden con el train?:**
+
+```{r}
+table(dataTest$FLTID %in% dataTrain$FLTID)
+```
+
+- **¿Cuántos puntos de destino coinciden entre el test y train?:**
+
+```{r}
+table(dataTest$DEPSTN %in% dataTrain$DEPSTN)
+```
+
+- **¿Cuántos puntos de llegada coinciden entre el test y train?:**
+
+```{r}
+table(dataTest$ARRSTN %in% dataTrain$ARRSTN)
+```
+
+- **¿Cuántos códigos de aeronave coinciden entre el test y train?:**
+
+```{r}
+table(dataTest$AC %in% dataTrain$AC)
+```
+
+# Nuevas variables
+
+- Basado en las variables originales derivo las siguientes características:
+  - Días de la semana, meses y año de vuelo.
+  - Agrego trimestres.
+  - Agrego semana del año.
+  - Agrego una variable que indique si es fin de semana.
+  - Con el tiempo de salida obtengo la **hora** y establezco una nueva variable que define si el vuelo es en la *madrugada*, *mañana*, *tarde* o *noche*.
+  - Resto el tiempo de salida con el tiempo de llegada para conocer el tiempo promedio de vuelo. El resultado estará dado en minutos, sin embargo, lo conviento a horas dividiendo sobre 60. <tred>Hay vuelos con inconsistencias en los tiempos de partida y llegada, por tal motivo el tiempo de vuelo de aquellos que superan las 24 horas les agrego NA (363 registros en total).</tred>
+  - Con el tiempo promedio de vuelo clasifico los vuelos en *vuelo corto* (hasta 2 horas), *vuelo moderado* (entre 2 y 5 horas) y *vuelo largo* (mayor a 5 horas).
+  - Cuento el número de vuelos por punto de salida. Esto supongo que servirá para observar la demanda de cada sitio (ciudad o país), esperando que donde haya más demanda posiblemente haya menor capacidad de reacción (¿o al contrario?) y quizás mayores retrasos. Lo mismo hago por punto de llegada.
+  - Cuento número de vuelos por código de aeronave, en el mismo orden de ideas de *oferta-demanda*.
+  - **Opcionales:** estas variables las agrego como opcionales porque podrían causar sobreajuste en los modelos.
+    - Para cada vuelo *-FLTID* promedio el tiempo de retraso. Los vuelos que están en el *train* que no pertenecen al *test* les agregaré `NA`. También se podría calcular la mediana en lugar del promedio.
+    
+## Nuevas Train
+
+```{r}
+# Nuevas variables
+dataTrain %>% 
+  mutate(dayWeek = weekdays(DATOP),
+         mes = factor(month(DATOP)),
+         anio = factor(year(DATOP)),
+         trimestre = factor(quarters(DATOP)),
+         weekYear = week(DATOP),
+         endWeek = factor(if_else(dayWeek %in% c("sábado", "domingo"),
+                           true = "Si", false = "No")),
+         horaVuelo = hour(STD),
+         horaVueloClas = if_else(
+           horaVuelo >= 0 & horaVuelo < 6,
+           true = "Magrudada",
+           false = if_else(
+             horaVuelo >= 6 & horaVuelo < 12,
+             true = "Mañana",
+             false = if_else(
+               horaVuelo >= 12 & horaVuelo < 18,
+               true = "Tarde",
+               false = "Noche"))),
+         tiempoVuelo = as.numeric(STA - STD)/60,
+         tiempoVuelo = ifelse(tiempoVuelo > 24, NA, tiempoVuelo),
+         tiempoClas = if_else(tiempoVuelo <= 2,
+                              true = "Corto",
+                              false = if_else(
+                                tiempoVuelo > 5,
+                                true = "Largo",
+                                false = "Moderado"))) %>% 
+  group_by(DEPSTN) %>% 
+  mutate(vuelosPartida = n()) %>% 
+  ungroup() %>% 
+  group_by(ARRSTN) %>% 
+  mutate(vuelosDestino = n()) %>% 
+  ungroup() %>% 
+  group_by(AC) %>% 
+  mutate(vuelosAC = n())
+```
+
+

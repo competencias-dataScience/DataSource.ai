@@ -1,7 +1,7 @@
 ---
 title: "Retrasos de vuelos"
 subtitle: "Análisis Exploratorio"
-author: "Edimer (*Sidereus*)"
+author: "Sidereus"
 output:
   html_notebook:
     code_folding: hide
@@ -141,17 +141,17 @@ table(dataTest$AC %in% dataTrain$AC)
   - Agrego semana del año.
   - Agrego una variable que indique si es fin de semana.
   - Con el tiempo de salida obtengo la **hora** y establezco una nueva variable que define si el vuelo es en la *madrugada*, *mañana*, *tarde* o *noche*.
-  - Resto el tiempo de salida con el tiempo de llegada para conocer el tiempo promedio de vuelo. El resultado estará dado en minutos, sin embargo, lo conviento a horas dividiendo sobre 60. <tred>Hay vuelos con inconsistencias en los tiempos de partida y llegada, por tal motivo el tiempo de vuelo de aquellos que superan las 24 horas les agrego NA (363 registros en total).</tred>
+  - Resto el tiempo de salida con el tiempo de llegada para conocer el tiempo promedio de vuelo. El resultado estará dado en minutos, sin embargo, lo convierto a horas dividiendo sobre 60. <tred>Hay vuelos con inconsistencias en los tiempos de partida y llegada, por tal motivo el tiempo de vuelo de aquellos que superan las 24 horas les agrego NA (363 registros en total).</tred>
   - Con el tiempo promedio de vuelo clasifico los vuelos en *vuelo corto* (hasta 2 horas), *vuelo moderado* (entre 2 y 5 horas) y *vuelo largo* (mayor a 5 horas).
   - Cuento el número de vuelos por punto de salida. Esto supongo que servirá para observar la demanda de cada sitio (ciudad o país), esperando que donde haya más demanda posiblemente haya menor capacidad de reacción (¿o al contrario?) y quizás mayores retrasos. Lo mismo hago por punto de llegada.
   - Cuento número de vuelos por código de aeronave, en el mismo orden de ideas de *oferta-demanda*.
   - **Opcionales:** estas variables las agrego como opcionales porque podrían causar sobreajuste en los modelos.
-    - Para cada vuelo *-FLTID* promedio el tiempo de retraso. Los vuelos que están en el *train* que no pertenecen al *test* les agregaré `NA`. También se podría calcular la mediana en lugar del promedio.
+    - Para cada vuelo *-FLTID* promedio el tiempo de retraso. Los vuelos que están en el *train* que no pertenecen al *test* les agrego `NA`. También se podría calcular la mediana en lugar del promedio.
     
 ## Nuevas Train
 
 ```{r}
-# Nuevas variables
+# Nuevas variables train
 dataTrain %>% 
   mutate(dayWeek = weekdays(DATOP),
          mes = factor(month(DATOP)),
@@ -186,7 +186,77 @@ dataTrain %>%
   mutate(vuelosDestino = n()) %>% 
   ungroup() %>% 
   group_by(AC) %>% 
-  mutate(vuelosAC = n())
+  mutate(vuelosAC = n()) %>% 
+  group_by(FLTID) %>% 
+  mutate(promedioRetraso = mean(target, na.rm = TRUE),
+         medianaRetraso = median(target, na.rm = TRUE),
+         desvRetraso = sd(target, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  mutate_if(is.character, as.factor) %>% 
+  select(target, everything()) ->
+  newDataTrain
+
+newDataTrain
 ```
 
+## Nuevas Test
+
+```{r}
+# Nuevas variables test
+dataTest %>% 
+  mutate(dayWeek = weekdays(DATOP),
+         mes = factor(month(DATOP)),
+         anio = factor(year(DATOP)),
+         trimestre = factor(quarters(DATOP)),
+         weekYear = week(DATOP),
+         endWeek = factor(if_else(dayWeek %in% c("sábado", "domingo"),
+                           true = "Si", false = "No")),
+         horaVuelo = hour(STD),
+         horaVueloClas = if_else(
+           horaVuelo >= 0 & horaVuelo < 6,
+           true = "Magrudada",
+           false = if_else(
+             horaVuelo >= 6 & horaVuelo < 12,
+             true = "Mañana",
+             false = if_else(
+               horaVuelo >= 12 & horaVuelo < 18,
+               true = "Tarde",
+               false = "Noche"))),
+         tiempoVuelo = as.numeric(STA - STD)/60,
+         tiempoVuelo = ifelse(tiempoVuelo > 24, NA, tiempoVuelo),
+         tiempoClas = if_else(tiempoVuelo <= 2,
+                              true = "Corto",
+                              false = if_else(
+                                tiempoVuelo > 5,
+                                true = "Largo",
+                                false = "Moderado"))) %>% 
+  group_by(DEPSTN) %>% 
+  mutate(vuelosPartida = n()) %>% 
+  ungroup() %>% 
+  group_by(ARRSTN) %>% 
+  mutate(vuelosDestino = n()) %>% 
+  ungroup() %>% 
+  group_by(AC) %>% 
+  mutate(vuelosAC = n()) %>% 
+  ungroup() %>% 
+  mutate_if(is.character, as.factor) ->
+  newDataTest
+
+# Juntando datos de tiempos de espera (target)
+left_join(newDataTest,
+          newDataTrain %>%
+            select(FLTID, promedioRetraso:desvRetraso),
+          by = "FLTID") %>%
+  distinct(ID, .keep_all = TRUE) ->
+  newDataTest
+
+newDataTest
+```
+
+## Exportando datos
+
+```{r}
+save(newDataTrain, file = "../myData/Train1.Rdata", compress = "xz")
+save(newDataTest, file = "../myData/Test1.Rdata", compress = "xz")
+```
 

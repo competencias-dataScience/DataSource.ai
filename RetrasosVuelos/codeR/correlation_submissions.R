@@ -7,12 +7,13 @@ s5 = read.csv("../submission/lgbmR5Vuelos.csv")
 s6 = read.csv("../submission/lgbmR6Vuelos.csv")
 s7 = read.csv("../submission/lgbmR7Vuelos.csv")
 s8 = read.csv("../submission/lgbmR8Vuelos.csv")
+s9 = read.csv("../submission/lgbmR9Vuelos.csv")
 
 # Data
 dataCor <- data.frame(
   s1 = s1$target, s2 = s2$target, s3 = s3$target,
   s4 = s4$target, s5 = s5$target, s6 = s6$target,
-  s7 = s7$target, s8 = s8$target
+  s7 = s7$target, s8 = s8$target, s9 = s9$target
 )
 
 # Correlation graphic --> Pearson

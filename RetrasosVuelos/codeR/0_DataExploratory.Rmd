@@ -136,10 +136,12 @@ table(dataTest$AC %in% dataTrain$AC)
 # Nuevas variables
 
 - Basado en las variables originales derivo las siguientes características:
-  - Días de la semana, meses y año de vuelo.
+  - Días del mes, días de la semana, meses y año de vuelo.
   - Agrego trimestres.
   - Agrego semana del año.
   - Agrego una variable que indique si es fin de semana.
+  - Agrego una nueva variable binaria que indique si es fin de mes. Si la fecha del vuelo está entre el 28 a 31 de cada mes, lo categorizo como fin de mes.
+  - Agrego una nueva variable binaria con fechas especiales. Aunque son muchas las fechas especiales que podrían ser tenidas en cuenta, incluyo el día del trabajo (1 de mayo), el día de san valentín (19 de septiembre), el día internacional de la mujer (8 de marzo), año nuevo (01 de enero), día de los reyes magos (06 de enero), noche de Hallowen (31 de octubre), noche buena (24 de diciembre), día de navidad (25 de diciembre) y fin de año (31 de diciembre).
   - Con el tiempo de salida obtengo la **hora** y establezco una nueva variable que define si el vuelo es en la *madrugada*, *mañana*, *tarde* o *noche*.
   - Resto el tiempo de salida con el tiempo de llegada para conocer el tiempo promedio de vuelo. El resultado estará dado en minutos, sin embargo, lo convierto a horas dividiendo sobre 60. <tred>Hay vuelos con inconsistencias en los tiempos de partida y llegada, por tal motivo el tiempo de vuelo de aquellos que superan las 24 horas les agrego NA (363 registros en total).</tred>
   - Con el tiempo promedio de vuelo clasifico los vuelos en *vuelo corto* (hasta 2 horas), *vuelo moderado* (entre 2 y 5 horas) y *vuelo largo* (mayor a 5 horas).
@@ -147,19 +149,29 @@ table(dataTest$AC %in% dataTrain$AC)
   - Cuento número de vuelos por código de aeronave, en el mismo orden de ideas de *oferta-demanda*.
   - **Opcionales:** estas variables las agrego como opcionales porque podrían causar sobreajuste en los modelos.
     - Para cada vuelo *-FLTID* promedio el tiempo de retraso. Los vuelos que están en el *train* que no pertenecen al *test* les agrego `NA`. También se podría calcular la mediana en lugar del promedio.
+    - Para cada vuelo obtengo la desviación estándar de la variable objetivo.
+    - Para cada vuelo obtengo el mínimo y máximo tiempo de retraso.
+    - Calculo el rango intercuartílico de retraso de cada vuelo.
     
 ## Nuevas Train
 
 ```{r}
+# Fechas especiales
+fechas <- c("5_1", "9_19", "3_8", "1_1", "1_6", "10_31", "12_24", "12_25",
+            "12_31")
+
 # Nuevas variables train
 dataTrain %>% 
   mutate(dayWeek = weekdays(DATOP),
          mes = factor(month(DATOP)),
+         dia = mday(DATOP),
          anio = factor(year(DATOP)),
          trimestre = factor(quarters(DATOP)),
          weekYear = week(DATOP),
          endWeek = factor(if_else(dayWeek %in% c("sábado", "domingo"),
                            true = "Si", false = "No")),
+         finMes = if_else(dia %in% c(28, 29, 30, 31),
+                          true = "Si", false = "No"),
          horaVuelo = hour(STD),
          horaVueloClas = if_else(
            horaVuelo >= 0 & horaVuelo < 6,
@@ -190,14 +202,22 @@ dataTrain %>%
   group_by(FLTID) %>% 
   mutate(promedioRetraso = mean(target, na.rm = TRUE),
          medianaRetraso = median(target, na.rm = TRUE),
-         desvRetraso = sd(target, na.rm = TRUE)) %>% 
+         desvRetraso = sd(target, na.rm = TRUE),
+         minRetraso = min(target, na.rm = TRUE),
+         maxRetraso = max(target, na.rm = TRUE),
+         RicRetraso = IQR(target, na.rm = TRUE)) %>% 
   ungroup() %>% 
+  unite(mes, dia, col = "diaMes", remove = FALSE) %>% 
+  mutate(fechaEspecial = if_else(diaMes %in% fechas,
+                                 true = "Si", false = "No")) %>% 
   mutate_if(is.character, as.factor) %>% 
-  select(target, everything()) ->
+  select(target, everything()) %>% 
+  select(-diaMes) ->
   newDataTrain
-
+  
 newDataTrain
 ```
+
 
 ## Nuevas Test
 
@@ -206,11 +226,14 @@ newDataTrain
 dataTest %>% 
   mutate(dayWeek = weekdays(DATOP),
          mes = factor(month(DATOP)),
+         dia = mday(DATOP),
          anio = factor(year(DATOP)),
          trimestre = factor(quarters(DATOP)),
          weekYear = week(DATOP),
          endWeek = factor(if_else(dayWeek %in% c("sábado", "domingo"),
                            true = "Si", false = "No")),
+         finMes = if_else(dia %in% c(28, 29, 30, 31),
+                          true = "Si", false = "No"),
          horaVuelo = hour(STD),
          horaVueloClas = if_else(
            horaVuelo >= 0 & horaVuelo < 6,
@@ -230,6 +253,9 @@ dataTest %>%
                                 tiempoVuelo > 5,
                                 true = "Largo",
                                 false = "Moderado"))) %>% 
+  unite(mes, dia, col = "diaMes", remove = FALSE) %>% 
+  mutate(fechaEspecial = if_else(diaMes %in% fechas,
+                                 true = "Si", false = "No")) %>% 
   group_by(DEPSTN) %>% 
   mutate(vuelosPartida = n()) %>% 
   ungroup() %>% 
@@ -239,13 +265,14 @@ dataTest %>%
   group_by(AC) %>% 
   mutate(vuelosAC = n()) %>% 
   ungroup() %>% 
+  select(-diaMes) %>% 
   mutate_if(is.character, as.factor) ->
   newDataTest
 
 # Juntando datos de tiempos de espera (target)
 left_join(newDataTest,
           newDataTrain %>%
-            select(FLTID, promedioRetraso:desvRetraso),
+            select(FLTID, promedioRetraso:RicRetraso),
           by = "FLTID") %>%
   distinct(ID, .keep_all = TRUE) ->
   newDataTest

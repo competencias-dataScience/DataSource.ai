@@ -53,8 +53,8 @@ modelo <- lgb.train(params = myParams,
                     valids = list(test = dataTest_lgbm),
                     early_stopping_rounds = 500)
 
-#best iter: 1511
-#best score: 106.6549
+#best iter: 1504
+#best score: 105.7866
 
 # Predictions
 predicciones <- predict(modelo, data.matrix(newDataTest %>%

@@ -1,6 +1,6 @@
 # Load data
-load("../myData/Train1.Rdata")
-load("../myData/Test1.Rdata")
+load("../myData/Train2.Rdata")
+load("../myData/Test2.Rdata")
 dataSample <- data.table::fread("../data/sample.csv")
 
 newDataTrain <- as.data.frame(newDataTrain)
@@ -14,7 +14,7 @@ dataTrain <- newDataTrain %>%
 # caret for partition data
 library(caret)
 set.seed(123)
-indx <- createDataPartition(y = dataTrain$target, times = 1, p = 0.80,
+indx <- createDataPartition(y = dataTrain$target, times = 1, p = 0.90,
                             list = FALSE)
 dfTrain <- dataTrain[indx, ]
 dfTest <- dataTrain[-indx, ]
@@ -49,12 +49,12 @@ myParams <- list(
 # Train model
 modelo <- lgb.train(params = myParams,
                     data = dataTrain_lgbm,
-                    nrounds = 10000,
+                    nrounds = 30000,
                     valids = list(test = dataTest_lgbm),
                     early_stopping_rounds = 500)
 
-#best iter: 1504
-#best score: 105.7866
+#best iter: 19519
+#best score: 102.1988
 
 # Predictions
 predicciones <- predict(modelo, data.matrix(newDataTest %>%

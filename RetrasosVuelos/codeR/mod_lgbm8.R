@@ -82,3 +82,4 @@ impModelo %>%
   coord_flip() + 
   geom_col(color = "black") +
   theme_light()
+

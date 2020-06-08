@@ -53,8 +53,8 @@ modelo <- lgb.train(params = myParams,
                     valids = list(test = dataTest_lgbm),
                     early_stopping_rounds = 500)
 
-#best iter: 238
-#best score: 107.9903
+#best iter: 1426
+#best score: 106.8384
 
 # Predictions
 predicciones <- predict(modelo, data.matrix(newDataTest %>%
@@ -68,10 +68,10 @@ x11();hist(predicciones)
 dataSample %>% 
   select(ID) %>% 
   mutate(target = predicciones) ->
-  lgbmR1
+  lgbmR3
 
 # Export submission for zindi
-write.csv(lgbmR1, file = "../submission/lgbmR1Vuelos.csv", row.names = FALSE)
+write.csv(lgbmR3, file = "../submission/lgbmR3Vuelos.csv", row.names = FALSE)
 
 # Importance variables
 impModelo <- lgb.importance(modelo, percentage = TRUE)

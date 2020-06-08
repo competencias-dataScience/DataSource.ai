@@ -1,0 +1,2 @@
+Recordatorio: los modelos del 1 al 4 fueron ajustados con Train1, el resto fueron ajustados con Train2.
+Aunque no lo tenía en principio, luego exporté dos bases de datos diferentes para no generar confusión.

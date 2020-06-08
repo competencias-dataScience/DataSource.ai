@@ -106,7 +106,6 @@ dataTest %>%
 head(dataTest, n = 10L)
 ```
 
-
 # Conteos
 
 - **¿Cuántos vuelos (*FLTID*) del test coinciden con el train?:**
@@ -152,8 +151,118 @@ table(dataTest$AC %in% dataTrain$AC)
     - Para cada vuelo obtengo la desviación estándar de la variable objetivo.
     - Para cada vuelo obtengo el mínimo y máximo tiempo de retraso.
     - Calculo el rango intercuartílico de retraso de cada vuelo.
-    
-## Nuevas Train
+
+## Nuevas Train 1
+
+```{r}
+# Nuevas variables train
+dataTrain %>% 
+  mutate(dayWeek = weekdays(DATOP),
+         mes = factor(month(DATOP)),
+         anio = factor(year(DATOP)),
+         trimestre = factor(quarters(DATOP)),
+         weekYear = week(DATOP),
+         endWeek = factor(if_else(dayWeek %in% c("sábado", "domingo"),
+                           true = "Si", false = "No")),
+         horaVuelo = hour(STD),
+         horaVueloClas = if_else(
+           horaVuelo >= 0 & horaVuelo < 6,
+           true = "Magrudada",
+           false = if_else(
+             horaVuelo >= 6 & horaVuelo < 12,
+             true = "Mañana",
+             false = if_else(
+               horaVuelo >= 12 & horaVuelo < 18,
+               true = "Tarde",
+               false = "Noche"))),
+         tiempoVuelo = as.numeric(STA - STD)/60,
+         tiempoVuelo = ifelse(tiempoVuelo > 24, NA, tiempoVuelo),
+         tiempoClas = if_else(tiempoVuelo <= 2,
+                              true = "Corto",
+                              false = if_else(
+                                tiempoVuelo > 5,
+                                true = "Largo",
+                                false = "Moderado"))) %>% 
+  group_by(DEPSTN) %>% 
+  mutate(vuelosPartida = n()) %>% 
+  ungroup() %>% 
+  group_by(ARRSTN) %>% 
+  mutate(vuelosDestino = n()) %>% 
+  ungroup() %>% 
+  group_by(AC) %>% 
+  mutate(vuelosAC = n()) %>% 
+  group_by(FLTID) %>% 
+  mutate(promedioRetraso = mean(target, na.rm = TRUE),
+         medianaRetraso = median(target, na.rm = TRUE),
+         desvRetraso = sd(target, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  mutate_if(is.character, as.factor) %>% 
+  select(target, everything()) ->
+  newDataTrain
+newDataTrain
+```
+
+## Nuevas Test 1
+
+```{r}
+# Nuevas variables test
+dataTest %>% 
+  mutate(dayWeek = weekdays(DATOP),
+         mes = factor(month(DATOP)),
+         anio = factor(year(DATOP)),
+         trimestre = factor(quarters(DATOP)),
+         weekYear = week(DATOP),
+         endWeek = factor(if_else(dayWeek %in% c("sábado", "domingo"),
+                           true = "Si", false = "No")),
+         horaVuelo = hour(STD),
+         horaVueloClas = if_else(
+           horaVuelo >= 0 & horaVuelo < 6,
+           true = "Magrudada",
+           false = if_else(
+             horaVuelo >= 6 & horaVuelo < 12,
+             true = "Mañana",
+             false = if_else(
+               horaVuelo >= 12 & horaVuelo < 18,
+               true = "Tarde",
+               false = "Noche"))),
+         tiempoVuelo = as.numeric(STA - STD)/60,
+         tiempoVuelo = ifelse(tiempoVuelo > 24, NA, tiempoVuelo),
+         tiempoClas = if_else(tiempoVuelo <= 2,
+                              true = "Corto",
+                              false = if_else(
+                                tiempoVuelo > 5,
+                                true = "Largo",
+                                false = "Moderado"))) %>% 
+  group_by(DEPSTN) %>% 
+  mutate(vuelosPartida = n()) %>% 
+  ungroup() %>% 
+  group_by(ARRSTN) %>% 
+  mutate(vuelosDestino = n()) %>% 
+  ungroup() %>% 
+  group_by(AC) %>% 
+  mutate(vuelosAC = n()) %>% 
+  ungroup() %>% 
+  mutate_if(is.character, as.factor) ->
+  newDataTest
+# Juntando datos de tiempos de espera (target)
+left_join(newDataTest,
+          newDataTrain %>%
+            select(FLTID, promedioRetraso:desvRetraso),
+          by = "FLTID") %>%
+  distinct(ID, .keep_all = TRUE) ->
+  newDataTest
+newDataTest
+```
+
+## Exportando datos 1
+
+```{r}
+# Nuevas 1
+save(newDataTrain, file = "../myData/Train1.Rdata", compress = "xz")
+save(newDataTest, file = "../myData/Test1.Rdata", compress = "xz")
+```
+
+## Nuevas Train 2
 
 ```{r}
 # Fechas especiales
@@ -219,7 +328,7 @@ newDataTrain
 ```
 
 
-## Nuevas Test
+## Nuevas Test 2
 
 ```{r}
 # Nuevas variables test
@@ -280,10 +389,11 @@ left_join(newDataTest,
 newDataTest
 ```
 
-## Exportando datos
+## Exportando datos 2
 
 ```{r}
-save(newDataTrain, file = "../myData/Train1.Rdata", compress = "xz")
-save(newDataTest, file = "../myData/Test1.Rdata", compress = "xz")
+# Nuevas 2
+save(newDataTrain, file = "../myData/Train2.Rdata", compress = "xz")
+save(newDataTest, file = "../myData/Test2.Rdata", compress = "xz")
 ```
 

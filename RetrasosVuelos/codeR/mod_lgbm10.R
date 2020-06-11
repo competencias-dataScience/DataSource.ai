@@ -12,25 +12,16 @@ library(tidyverse)
 dataTrain <- newDataTrain %>%
   select(-c(ID, DATOP, STD, STA))
 
-# caret for partition data with resample
-library(caret)
-set.seed(123)
-index <- createDataPartition(y = dataTrain$target, times = 10, p = 0.70,
-                             list = TRUE)
-
 # Categorical features
 catFeatures <- names(
   dataTrain %>% select_if(is.factor)
 )
 
-# Data for lightgbm
-library(lightgbm)
-dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dfTrain[, -1]),
-                              label = dfTrain[, 1],
-                              categorical_feature = catFeatures)
-dataTest_lgbm <- lgb.Dataset(data = data.matrix(dfTest[, -1]),
-                             label = dfTest[, 1],
-                             categorical_feature = catFeatures)
+# caret for partition data with resample
+library(caret)
+set.seed(123)
+index <- createDataPartition(y = dataTrain$target, times = 10, p = 0.70,
+                             list = TRUE)
 
 # Parameters for lightgbm
 myParams <- list(
@@ -55,10 +46,10 @@ for (i in 1:k) {
   # Data train and test
   dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dataTrain[index[[i]], -1]),
                                 label = dataTrain[index[[i]], 1],
-                                categorical_feature = catfeatures)
+                                categorical_feature = catFeatures)
   dataTest_lgbm <- lgb.Dataset(data = data.matrix(dataTrain[-index[[i]], -1]),
                                label = dataTrain[-index[[i]], 1],
-                               categorical_feature = catfeatures)
+                               categorical_feature = catFeatures)
   
   # Train model
   model <- lgb.train(params = myParams,

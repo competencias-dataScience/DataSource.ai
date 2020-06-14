@@ -1,0 +1,1389 @@
+---
+title: "Retrasos de vuelos"
+subtitle: "Análisis Exploratorio"
+author: "Edimer David Jaramillo (*sidereus*)"
+output:
+  html_notebook:
+    code_folding: hide
+    df_print: paged
+    css: estilo.css
+    toc: true
+    toc_float:
+      smooth_scroll: false
+      collapsed: false
+    highlight: breezedark
+    
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = TRUE,
+                      fig.align = "center",
+                      fig.width = 9,
+                      warning = FALSE,
+                      message = FALSE)
+```
+
+<center>
+<img src = "img/img1.png" />
+</center>
+
+# Reto
+
+- [Reto en DataSource.ai](https://www.datasource.ai/es/home/competitions/prediccion-de-retrasos-de-vuelos-para-una-aerolinea)
+
+# Datos
+
+```{r}
+library(data.table)
+dataTrain <- fread("../data/train.csv")
+dataTest <- fread("../data/test.csv")
+dataSample <- fread("../data/sample.csv")
+```
+
+# Variables
+
+- **ID:** identificación de vuelo.
+- **DATOP:** Fecha de vuelo.
+- **FLTID:** Número de vuelo
+- **DEPSTN:** Punto de partida
+- **ARRSTN:** Punto de llegada
+- **STD:** Hora de salida programada
+- **STA:** Hora prevista de llegada
+- **STATUS:** Estado del vuelo
+- **AC:** Código de aeronave
+- **target:** Tiempo de retraso
+
+# Train y Test
+
+- **Train:**
+  - En el conjunto de datos de *train* hay 107833 vuelos registrados.
+  - El rango de fechas de vuelos es desde el 01-01-2016 hasta 31-12-2018.
+  - Hay 1861 vuelos registrados. Cada vuelo puede estar registrado en diferentes fechas.
+  - En total son 132 puntos de destino diferentes y 128 puntos de llegada.
+  - Hay en total 5 estados (*STATUS*) de vuelo.
+  - Hay 68 códigos de aeronaves diferentes.
+  - El tiempo de retraso (*target*) está dado en minutos.
+
+```{r}
+library(tidyverse)
+# Train
+dataTrain %>% 
+  mutate(DATOP = as.Date(DATOP),
+         FLTID = as.factor(FLTID),
+         DEPSTN = as.factor(DEPSTN),
+         ARRSTN = as.factor(ARRSTN),
+         STD = as.POSIXct(STD),
+         STA = gsub("\\.", ":", STA),
+         STA = as.POSIXct(STA),
+         STATUS = as.factor(STATUS),
+         AC = as.factor(AC)) ->
+  dataTrain
+head(dataTrain, n = 10L)
+```
+
+- **Test:**
+  - En el conjunto de *test* hay 9333 vuelos registrados.
+  - El rango de fechas de vuelos es desde 01-05-2016 hasta 20-09-2018.
+  - Hay 700 vuelos registrados.
+  - En total son 82 puntos de destino y 84 puntos de llegada diferentes.
+  - Los mismos 5 estados de vuelo.
+  - Hay 44 códigos de aeronaves.
+
+```{r}
+# Test
+dataTest %>% 
+  mutate(DATOP = as.Date(DATOP),
+         FLTID = as.factor(FLTID),
+         DEPSTN = as.factor(DEPSTN),
+         ARRSTN = as.factor(ARRSTN),
+         STD = as.POSIXct(STD),
+         STA = gsub("\\.", ":", STA),
+         STA = as.POSIXct(STA),
+         STATUS = as.factor(STATUS),
+         AC = as.factor(AC)) ->
+  dataTest
+head(dataTest, n = 10L)
+```
+
+# Conteos
+
+- **¿Cuántos vuelos (*FLTID*) del test coinciden con el train?:**
+
+```{r}
+table(dataTest$FLTID %in% dataTrain$FLTID)
+```
+
+- **¿Cuántos puntos de destino coinciden entre el test y train?:**
+
+```{r}
+table(dataTest$DEPSTN %in% dataTrain$DEPSTN)
+```
+
+- **¿Cuántos puntos de llegada coinciden entre el test y train?:**
+
+```{r}
+table(dataTest$ARRSTN %in% dataTrain$ARRSTN)
+```
+
+- **¿Cuántos códigos de aeronave coinciden entre el test y train?:**
+
+```{r}
+table(dataTest$AC %in% dataTrain$AC)
+```
+
+# Nuevas variables
+
+- Basado en las variables originales derivo las siguientes características:
+  - Días del mes, días de la semana, meses y año de vuelo.
+  - Agrego trimestres.
+  - Agrego semana del año.
+  - Agrego una variable que indique si es fin de semana.
+  - Agrego una nueva variable binaria que indique si es fin de mes. Si la fecha del vuelo está entre el 28 a 31 de cada mes, lo categorizo como fin de mes.
+  - Agrego una nueva variable binaria con fechas especiales. Aunque son muchas las fechas especiales que podrían ser tenidas en cuenta, incluyo el día del trabajo (1 de mayo), el día de san valentín (19 de septiembre), el día internacional de la mujer (8 de marzo), año nuevo (01 de enero), día de los reyes magos (06 de enero), noche de Hallowen (31 de octubre), noche buena (24 de diciembre), día de navidad (25 de diciembre) y fin de año (31 de diciembre).
+  - Con el tiempo de salida obtengo la **hora** y establezco una nueva variable que define si el vuelo es en la *madrugada*, *mañana*, *tarde* o *noche*.
+  - Resto el tiempo de salida con el tiempo de llegada para conocer el tiempo promedio de vuelo. El resultado estará dado en minutos, sin embargo, lo convierto a horas dividiendo sobre 60. <tred>Hay vuelos con inconsistencias en los tiempos de partida y llegada, por tal motivo el tiempo de vuelo de aquellos que superan las 24 horas les agrego NA (363 registros en total).</tred>
+  - Con el tiempo promedio de vuelo clasifico los vuelos en *vuelo corto* (hasta 2 horas), *vuelo moderado* (entre 2 y 5 horas) y *vuelo largo* (mayor a 5 horas).
+  - Cuento el número de vuelos por punto de salida. Esto supongo que servirá para observar la demanda de cada sitio (ciudad o país), esperando que donde haya más demanda posiblemente haya menor capacidad de reacción (¿o al contrario?) y quizás mayores retrasos. Lo mismo hago por punto de llegada.
+  - Cuento número de vuelos por código de aeronave, en el mismo orden de ideas de *oferta-demanda*.
+  - **Opcionales:** estas variables las agrego como opcionales porque podrían causar sobreajuste en los modelos.
+    - Para cada vuelo *-FLTID* promedio el tiempo de retraso. Los vuelos que están en el *train* que no pertenecen al *test* les agrego `NA`. También se podría calcular la mediana en lugar del promedio.
+    - Para cada vuelo obtengo la desviación estándar de la variable objetivo.
+    - Para cada vuelo obtengo el mínimo y máximo tiempo de retraso.
+    - Calculo el rango intercuartílico de retraso de cada vuelo.
+
+## Nuevas Train 1
+
+```{r}
+# Nuevas variables train
+dataTrain %>% 
+  mutate(dayWeek = weekdays(DATOP),
+         mes = factor(month(DATOP)),
+         anio = factor(year(DATOP)),
+         trimestre = factor(quarters(DATOP)),
+         weekYear = week(DATOP),
+         endWeek = factor(if_else(dayWeek %in% c("sábado", "domingo"),
+                           true = "Si", false = "No")),
+         horaVuelo = hour(STD),
+         horaVueloClas = if_else(
+           horaVuelo >= 0 & horaVuelo < 6,
+           true = "Magrudada",
+           false = if_else(
+             horaVuelo >= 6 & horaVuelo < 12,
+             true = "Mañana",
+             false = if_else(
+               horaVuelo >= 12 & horaVuelo < 18,
+               true = "Tarde",
+               false = "Noche"))),
+         tiempoVuelo = as.numeric(STA - STD)/60,
+         tiempoVuelo = ifelse(tiempoVuelo > 24, NA, tiempoVuelo),
+         tiempoClas = if_else(tiempoVuelo <= 2,
+                              true = "Corto",
+                              false = if_else(
+                                tiempoVuelo > 5,
+                                true = "Largo",
+                                false = "Moderado"))) %>% 
+  group_by(DEPSTN) %>% 
+  mutate(vuelosPartida = n()) %>% 
+  ungroup() %>% 
+  group_by(ARRSTN) %>% 
+  mutate(vuelosDestino = n()) %>% 
+  ungroup() %>% 
+  group_by(AC) %>% 
+  mutate(vuelosAC = n()) %>% 
+  group_by(FLTID) %>% 
+  mutate(promedioRetraso = mean(target, na.rm = TRUE),
+         medianaRetraso = median(target, na.rm = TRUE),
+         desvRetraso = sd(target, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  mutate_if(is.character, as.factor) %>% 
+  select(target, everything()) ->
+  newDataTrain
+newDataTrain
+```
+
+## Nuevas Test 1
+
+```{r}
+# Nuevas variables test
+dataTest %>% 
+  mutate(dayWeek = weekdays(DATOP),
+         mes = factor(month(DATOP)),
+         anio = factor(year(DATOP)),
+         trimestre = factor(quarters(DATOP)),
+         weekYear = week(DATOP),
+         endWeek = factor(if_else(dayWeek %in% c("sábado", "domingo"),
+                           true = "Si", false = "No")),
+         horaVuelo = hour(STD),
+         horaVueloClas = if_else(
+           horaVuelo >= 0 & horaVuelo < 6,
+           true = "Magrudada",
+           false = if_else(
+             horaVuelo >= 6 & horaVuelo < 12,
+             true = "Mañana",
+             false = if_else(
+               horaVuelo >= 12 & horaVuelo < 18,
+               true = "Tarde",
+               false = "Noche"))),
+         tiempoVuelo = as.numeric(STA - STD)/60,
+         tiempoVuelo = ifelse(tiempoVuelo > 24, NA, tiempoVuelo),
+         tiempoClas = if_else(tiempoVuelo <= 2,
+                              true = "Corto",
+                              false = if_else(
+                                tiempoVuelo > 5,
+                                true = "Largo",
+                                false = "Moderado"))) %>% 
+  group_by(DEPSTN) %>% 
+  mutate(vuelosPartida = n()) %>% 
+  ungroup() %>% 
+  group_by(ARRSTN) %>% 
+  mutate(vuelosDestino = n()) %>% 
+  ungroup() %>% 
+  group_by(AC) %>% 
+  mutate(vuelosAC = n()) %>% 
+  ungroup() %>% 
+  mutate_if(is.character, as.factor) ->
+  newDataTest
+# Juntando datos de tiempos de espera (target)
+left_join(newDataTest,
+          newDataTrain %>%
+            select(FLTID, promedioRetraso:desvRetraso),
+          by = "FLTID") %>%
+  distinct(ID, .keep_all = TRUE) ->
+  newDataTest
+newDataTest
+```
+
+## Exportando datos 1
+
+```{r}
+# Nuevas 1
+save(newDataTrain, file = "../myData/Train1.Rdata", compress = "xz")
+save(newDataTest, file = "../myData/Test1.Rdata", compress = "xz")
+```
+
+## Nuevas Train 2
+
+```{r}
+# Fechas especiales
+fechas <- c("5_1", "9_19", "3_8", "1_1", "1_6", "10_31", "12_24", "12_25",
+            "12_31")
+
+# Nuevas variables train
+dataTrain %>% 
+  mutate(dayWeek = weekdays(DATOP),
+         mes = factor(month(DATOP)),
+         dia = mday(DATOP),
+         anio = factor(year(DATOP)),
+         trimestre = factor(quarters(DATOP)),
+         weekYear = week(DATOP),
+         endWeek = factor(if_else(dayWeek %in% c("sábado", "domingo"),
+                           true = "Si", false = "No")),
+         finMes = if_else(dia %in% c(28, 29, 30, 31),
+                          true = "Si", false = "No"),
+         horaVuelo = hour(STD),
+         horaVueloClas = if_else(
+           horaVuelo >= 0 & horaVuelo < 6,
+           true = "Magrudada",
+           false = if_else(
+             horaVuelo >= 6 & horaVuelo < 12,
+             true = "Mañana",
+             false = if_else(
+               horaVuelo >= 12 & horaVuelo < 18,
+               true = "Tarde",
+               false = "Noche"))),
+         tiempoVuelo = as.numeric(STA - STD)/60,
+         tiempoVuelo = ifelse(tiempoVuelo > 24, NA, tiempoVuelo),
+         tiempoClas = if_else(tiempoVuelo <= 2,
+                              true = "Corto",
+                              false = if_else(
+                                tiempoVuelo > 5,
+                                true = "Largo",
+                                false = "Moderado"))) %>% 
+  group_by(DEPSTN) %>% 
+  mutate(vuelosPartida = n()) %>% 
+  ungroup() %>% 
+  group_by(ARRSTN) %>% 
+  mutate(vuelosDestino = n()) %>% 
+  ungroup() %>% 
+  group_by(AC) %>% 
+  mutate(vuelosAC = n()) %>% 
+  group_by(FLTID) %>% 
+  mutate(promedioRetraso = mean(target, na.rm = TRUE),
+         medianaRetraso = median(target, na.rm = TRUE),
+         desvRetraso = sd(target, na.rm = TRUE),
+         minRetraso = min(target, na.rm = TRUE),
+         maxRetraso = max(target, na.rm = TRUE),
+         RicRetraso = IQR(target, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  unite(mes, dia, col = "diaMes", remove = FALSE) %>% 
+  mutate(fechaEspecial = if_else(diaMes %in% fechas,
+                                 true = "Si", false = "No")) %>% 
+  mutate_if(is.character, as.factor) %>% 
+  select(target, everything()) %>% 
+  select(-diaMes) ->
+  newDataTrain
+  
+newDataTrain
+```
+
+
+## Nuevas Test 2
+
+```{r}
+# Nuevas variables test
+dataTest %>% 
+  mutate(dayWeek = weekdays(DATOP),
+         mes = factor(month(DATOP)),
+         dia = mday(DATOP),
+         anio = factor(year(DATOP)),
+         trimestre = factor(quarters(DATOP)),
+         weekYear = week(DATOP),
+         endWeek = factor(if_else(dayWeek %in% c("sábado", "domingo"),
+                           true = "Si", false = "No")),
+         finMes = if_else(dia %in% c(28, 29, 30, 31),
+                          true = "Si", false = "No"),
+         horaVuelo = hour(STD),
+         horaVueloClas = if_else(
+           horaVuelo >= 0 & horaVuelo < 6,
+           true = "Magrudada",
+           false = if_else(
+             horaVuelo >= 6 & horaVuelo < 12,
+             true = "Mañana",
+             false = if_else(
+               horaVuelo >= 12 & horaVuelo < 18,
+               true = "Tarde",
+               false = "Noche"))),
+         tiempoVuelo = as.numeric(STA - STD)/60,
+         tiempoVuelo = ifelse(tiempoVuelo > 24, NA, tiempoVuelo),
+         tiempoClas = if_else(tiempoVuelo <= 2,
+                              true = "Corto",
+                              false = if_else(
+                                tiempoVuelo > 5,
+                                true = "Largo",
+                                false = "Moderado"))) %>% 
+  unite(mes, dia, col = "diaMes", remove = FALSE) %>% 
+  mutate(fechaEspecial = if_else(diaMes %in% fechas,
+                                 true = "Si", false = "No")) %>% 
+  group_by(DEPSTN) %>% 
+  mutate(vuelosPartida = n()) %>% 
+  ungroup() %>% 
+  group_by(ARRSTN) %>% 
+  mutate(vuelosDestino = n()) %>% 
+  ungroup() %>% 
+  group_by(AC) %>% 
+  mutate(vuelosAC = n()) %>% 
+  ungroup() %>% 
+  select(-diaMes) %>% 
+  mutate_if(is.character, as.factor) ->
+  newDataTest
+
+# Juntando datos de tiempos de espera (target)
+left_join(newDataTest,
+          newDataTrain %>%
+            select(FLTID, promedioRetraso:RicRetraso),
+          by = "FLTID") %>%
+  distinct(ID, .keep_all = TRUE) ->
+  newDataTest
+
+newDataTest
+```
+
+## Exportando datos 2
+
+```{r}
+# Nuevas 2
+save(newDataTrain, file = "../myData/Train2.Rdata", compress = "xz")
+save(newDataTest, file = "../myData/Test2.Rdata", compress = "xz")
+```
+
+# Modelos
+
+## Modelo 1
+
+```{r}
+# Load data
+load("../myData/Train1.Rdata")
+load("../myData/Test1.Rdata")
+dataSample <- data.table::fread("../data/sample.csv")
+
+newDataTrain <- as.data.frame(newDataTrain)
+newDataTest <- as.data.frame(newDataTest)
+
+# Selection of variables for analysis 
+library(tidyverse)
+dataTrain <- newDataTrain %>%
+  select(-c(ID, DATOP, STD, STA))
+
+# caret for partition data
+library(caret)
+set.seed(123)
+indx <- createDataPartition(y = dataTrain$target, times = 1, p = 0.70,
+                            list = FALSE)
+dfTrain <- dataTrain[indx, ]
+dfTest <- dataTrain[-indx, ]
+
+# Categorical features
+catFeatures <- names(
+  dataTrain %>% select_if(is.factor)
+)
+
+# Data for lightgbm
+library(lightgbm)
+dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dfTrain[, -1]),
+                              label = dfTrain[, 1],
+                              categorical_feature = catFeatures)
+dataTest_lgbm <- lgb.Dataset(data = data.matrix(dfTest[, -1]),
+                             label = dfTest[, 1],
+                             categorical_feature = catFeatures)
+
+# Parameters for lightgbm
+myParams <- list(
+  boosting = "gbdt",
+  objective = "regression",
+  metric = "rmse",
+  learning_rate = 0.1,
+  feature_fraction = 1,
+  bagging_fraction = 1,
+  max_depth = -1
+)
+
+# Train model
+modelo <- lgb.train(params = myParams,
+                    data = dataTrain_lgbm,
+                    nrounds = 10000,
+                    valids = list(test = dataTest_lgbm),
+                    early_stopping_rounds = 500)
+
+#best iter: 238
+#best score: 107.9903
+
+# Predictions
+predicciones <- predict(modelo, data.matrix(newDataTest %>%
+                                              select(-c(ID, DATOP, STD, STA))), 
+                        num_iteration = modelo$best_iter)
+
+predicciones[predicciones < 0] <- 0
+x11();hist(predicciones)
+
+# Submission
+dataSample %>% 
+  select(ID) %>% 
+  mutate(target = predicciones) ->
+  lgbmR1
+
+# Export submission for zindi
+write.csv(lgbmR1, file = "../submission/lgbmR1Vuelos.csv", row.names = FALSE)
+```
+
+## Modelo 2
+
+```{r}
+# Load data
+load("../myData/Train1.Rdata")
+load("../myData/Test1.Rdata")
+dataSample <- data.table::fread("../data/sample.csv")
+
+newDataTrain <- as.data.frame(newDataTrain)
+newDataTest <- as.data.frame(newDataTest)
+
+# Selection of variables for analysis 
+library(tidyverse)
+dataTrain <- newDataTrain %>%
+  select(-c(ID, DATOP, STD, STA))
+
+# caret for partition data
+library(caret)
+set.seed(123)
+indx <- createDataPartition(y = dataTrain$target, times = 1, p = 0.70,
+                            list = FALSE)
+dfTrain <- dataTrain[indx, ]
+dfTest <- dataTrain[-indx, ]
+
+# Categorical features
+catFeatures <- names(
+  dataTrain %>% select_if(is.factor)
+)
+
+# Data for lightgbm
+library(lightgbm)
+dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dfTrain[, -1]),
+                              label = dfTrain[, 1],
+                              categorical_feature = catFeatures)
+dataTest_lgbm <- lgb.Dataset(data = data.matrix(dfTest[, -1]),
+                             label = dfTest[, 1],
+                             categorical_feature = catFeatures)
+
+# Parameters for lightgbm
+myParams <- list(
+  boosting = "gbdt",
+  objective = "regression",
+  metric = "rmse",
+  learning_rate = 0.1,
+  feature_fraction = 0.5,
+  bagging_fraction = 1,
+  min_data_in_leaf = 100,
+  num_leaves = 255,
+  max_depth = -1
+)
+
+# Train model
+modelo <- lgb.train(params = myParams,
+                    data = dataTrain_lgbm,
+                    nrounds = 10000,
+                    valids = list(test = dataTest_lgbm),
+                    early_stopping_rounds = 500)
+
+#best iter: 69
+#best score: 109.0651
+
+# Predictions
+predicciones <- predict(modelo, data.matrix(newDataTest %>%
+                                              select(-c(ID, DATOP, STD, STA))), 
+                        num_iteration = modelo$best_iter)
+
+predicciones[predicciones < 0] <- 0
+x11();hist(predicciones)
+
+# Submission
+dataSample %>% 
+  select(ID) %>% 
+  mutate(target = predicciones) ->
+  lgbmR2
+
+# Export submission for zindi
+write.csv(lgbmR2, file = "../submission/lgbmR2Vuelos.csv", row.names = FALSE)
+```
+
+
+## Modelo 3
+
+```{r}
+# Load data
+load("../myData/Train1.Rdata")
+load("../myData/Test1.Rdata")
+dataSample <- data.table::fread("../data/sample.csv")
+
+newDataTrain <- as.data.frame(newDataTrain)
+newDataTest <- as.data.frame(newDataTest)
+
+# Selection of variables for analysis 
+library(tidyverse)
+dataTrain <- newDataTrain %>%
+  select(-c(ID, DATOP, STD, STA))
+
+# caret for partition data
+library(caret)
+set.seed(123)
+indx <- createDataPartition(y = dataTrain$target, times = 1, p = 0.80,
+                            list = FALSE)
+dfTrain <- dataTrain[indx, ]
+dfTest <- dataTrain[-indx, ]
+
+# Categorical features
+catFeatures <- names(
+  dataTrain %>% select_if(is.factor)
+)
+
+# Data for lightgbm
+library(lightgbm)
+dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dfTrain[, -1]),
+                              label = dfTrain[, 1],
+                              categorical_feature = catFeatures)
+dataTest_lgbm <- lgb.Dataset(data = data.matrix(dfTest[, -1]),
+                             label = dfTest[, 1],
+                             categorical_feature = catFeatures)
+
+# Parameters for lightgbm
+myParams <- list(
+  boosting = "gbdt",
+  objective = "regression",
+  metric = "rmse",
+  learning_rate = 0.01,
+  feature_fraction = 1,
+  bagging_fraction = 1,
+  max_depth = -1
+)
+
+# Train model
+modelo <- lgb.train(params = myParams,
+                    data = dataTrain_lgbm,
+                    nrounds = 10000,
+                    valids = list(test = dataTest_lgbm),
+                    early_stopping_rounds = 500)
+
+#best iter: 1426
+#best score: 106.8384
+
+# Predictions
+predicciones <- predict(modelo, data.matrix(newDataTest %>%
+                                              select(-c(ID, DATOP, STD, STA))), 
+                        num_iteration = modelo$best_iter)
+
+predicciones[predicciones < 0] <- 0
+x11();hist(predicciones)
+
+# Submission
+dataSample %>% 
+  select(ID) %>% 
+  mutate(target = predicciones) ->
+  lgbmR3
+
+# Export submission for zindi
+write.csv(lgbmR3, file = "../submission/lgbmR3Vuelos.csv", row.names = FALSE)
+```
+
+## Modelo 4
+
+```{r}
+# Load data
+load("../myData/Train1.Rdata")
+load("../myData/Test1.Rdata")
+dataSample <- data.table::fread("../data/sample.csv")
+
+newDataTrain <- as.data.frame(newDataTrain)
+newDataTest <- as.data.frame(newDataTest)
+
+# Selection of variables for analysis 
+library(tidyverse)
+dataTrain <- newDataTrain %>%
+  select(-c(ID, DATOP, STD, STA))
+
+# caret for partition data
+library(caret)
+set.seed(123)
+indx <- createDataPartition(y = dataTrain$target, times = 1, p = 0.80,
+                            list = FALSE)
+dfTrain <- dataTrain[indx, ]
+dfTest <- dataTrain[-indx, ]
+
+# Categorical features
+catFeatures <- names(
+  dataTrain %>% select_if(is.factor)
+)
+
+# Data for lightgbm
+library(lightgbm)
+dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dfTrain[, -1]),
+                              label = dfTrain[, 1],
+                              categorical_feature = catFeatures)
+dataTest_lgbm <- lgb.Dataset(data = data.matrix(dfTest[, -1]),
+                             label = dfTest[, 1],
+                             categorical_feature = catFeatures)
+
+# Parameters for lightgbm
+myParams <- list(
+  boosting = "gbdt",
+  objective = "regression",
+  metric = "rmse",
+  learning_rate = 0.01,
+  feature_fraction = 0.5,
+  bagging_fraction = 1,
+  min_data_in_leaf = 100,
+  num_leaves = 255,
+  max_depth = -1
+)
+
+# Train model
+modelo <- lgb.train(params = myParams,
+                    data = dataTrain_lgbm,
+                    nrounds = 10000,
+                    valids = list(test = dataTest_lgbm),
+                    early_stopping_rounds = 500)
+
+#best iter: 878
+#best score: 106.9247
+
+# Predictions
+predicciones <- predict(modelo, data.matrix(newDataTest %>%
+                                              select(-c(ID, DATOP, STD, STA))), 
+                        num_iteration = modelo$best_iter)
+
+predicciones[predicciones < 0] <- 0
+x11();hist(predicciones)
+
+# Submission
+dataSample %>% 
+  select(ID) %>% 
+  mutate(target = predicciones) ->
+  lgbmR4
+
+# Export submission for zindi
+write.csv(lgbmR4, file = "../submission/lgbmR4Vuelos.csv", row.names = FALSE)
+```
+
+## Modelo 5
+
+```{r}
+# Load data
+load("../myData/Train1.Rdata")
+load("../myData/Test1.Rdata")
+dataSample <- data.table::fread("../data/sample.csv")
+
+newDataTrain <- as.data.frame(newDataTrain)
+newDataTest <- as.data.frame(newDataTest)
+
+# Selection of variables for analysis 
+library(tidyverse)
+dataTrain <- newDataTrain %>%
+  select(-c(ID, DATOP, STD, STA))
+
+# caret for partition data
+library(caret)
+set.seed(123)
+indx <- createDataPartition(y = dataTrain$target, times = 1, p = 0.80,
+                            list = FALSE)
+dfTrain <- dataTrain[indx, ]
+dfTest <- dataTrain[-indx, ]
+
+# Categorical features
+catFeatures <- names(
+  dataTrain %>% select_if(is.factor)
+)
+
+# Data for lightgbm
+library(lightgbm)
+dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dfTrain[, -1]),
+                              label = dfTrain[, 1],
+                              categorical_feature = catFeatures)
+dataTest_lgbm <- lgb.Dataset(data = data.matrix(dfTest[, -1]),
+                             label = dfTest[, 1],
+                             categorical_feature = catFeatures)
+
+# Parameters for lightgbm
+myParams <- list(
+  boosting = "gbdt",
+  objective = "regression",
+  metric = "rmse",
+  learning_rate = 0.01,
+  feature_fraction = 1,
+  bagging_fraction = 1,
+  min_data_in_leaf = 300,
+  num_leaves = 500,
+  max_bin = 500,
+  max_depth = -1
+)
+
+# Train model
+modelo <- lgb.train(params = myParams,
+                    data = dataTrain_lgbm,
+                    nrounds = 10000,
+                    valids = list(test = dataTest_lgbm),
+                    early_stopping_rounds = 500)
+
+#best iter: 689
+#best score: 108.1176
+
+# Predictions
+predicciones <- predict(modelo, data.matrix(newDataTest %>%
+                                              select(-c(ID, DATOP, STD, STA))), 
+                        num_iteration = modelo$best_iter)
+
+predicciones[predicciones < 0] <- 0
+x11();hist(predicciones)
+
+# Submission
+dataSample %>% 
+  select(ID) %>% 
+  mutate(target = predicciones) ->
+  lgbmR5
+
+# Export submission for zindi
+write.csv(lgbmR5, file = "../submission/lgbmR5Vuelos.csv", row.names = FALSE)
+```
+
+## Modelo 6
+
+```{r}
+# Load data
+load("../myData/Train2.Rdata")
+load("../myData/Test2.Rdata")
+dataSample <- data.table::fread("../data/sample.csv")
+
+newDataTrain <- as.data.frame(newDataTrain)
+newDataTest <- as.data.frame(newDataTest)
+
+# Selection of variables for analysis 
+library(tidyverse)
+dataTrain <- newDataTrain %>%
+  select(-c(ID, DATOP, STD, STA, minRetraso, maxRetraso))
+
+# caret for partition data
+library(caret)
+set.seed(123)
+indx <- createDataPartition(y = dataTrain$target, times = 1, p = 0.80,
+                            list = FALSE)
+dfTrain <- dataTrain[indx, ]
+dfTest <- dataTrain[-indx, ]
+
+# Categorical features
+catFeatures <- names(
+  dataTrain %>% select_if(is.factor)
+)
+
+# Data for lightgbm
+library(lightgbm)
+dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dfTrain[, -1]),
+                              label = dfTrain[, 1],
+                              categorical_feature = catFeatures)
+dataTest_lgbm <- lgb.Dataset(data = data.matrix(dfTest[, -1]),
+                             label = dfTest[, 1],
+                             categorical_feature = catFeatures)
+
+# Parameters for lightgbm
+myParams <- list(
+  boosting = "gbdt",
+  objective = "regression",
+  metric = "rmse",
+  learning_rate = 0.01,
+  feature_fraction = 1,
+  bagging_fraction = 1,
+  max_depth = -1
+)
+
+# Train model
+modelo <- lgb.train(params = myParams,
+                    data = dataTrain_lgbm,
+                    nrounds = 10000,
+                    valids = list(test = dataTest_lgbm),
+                    early_stopping_rounds = 500)
+
+#best iter: 1620
+#best score: 105.6486
+
+# Predictions
+predicciones <- predict(modelo, data.matrix(newDataTest %>%
+                                              select(-c(ID, DATOP, STD, STA,
+                                                        minRetraso, maxRetraso))), 
+                        num_iteration = modelo$best_iter)
+
+predicciones[predicciones < 0] <- 0
+x11();hist(predicciones)
+
+# Submission
+dataSample %>% 
+  select(ID) %>% 
+  mutate(target = predicciones) ->
+  lgbmR6
+
+# Export submission for zindi
+write.csv(lgbmR6, file = "../submission/lgbmR6Vuelos.csv", row.names = FALSE)
+```
+
+## Modelo 7
+
+```{r}
+# Load data
+load("../myData/Train2.Rdata")
+load("../myData/Test2.Rdata")
+dataSample <- data.table::fread("../data/sample.csv")
+
+newDataTrain <- as.data.frame(newDataTrain)
+newDataTest <- as.data.frame(newDataTest)
+
+# Selection of variables for analysis 
+library(tidyverse)
+dataTrain <- newDataTrain %>%
+  select(-c(ID, DATOP, STD, STA, dia, minRetraso, maxRetraso, RicRetraso, fechaEspecial))
+
+# caret for partition data
+library(caret)
+set.seed(123)
+indx <- createDataPartition(y = dataTrain$target, times = 1, p = 0.80,
+                            list = FALSE)
+dfTrain <- dataTrain[indx, ]
+dfTest <- dataTrain[-indx, ]
+
+# Categorical features
+catFeatures <- names(
+  dataTrain %>% select_if(is.factor)
+)
+
+# Data for lightgbm
+library(lightgbm)
+dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dfTrain[, -1]),
+                              label = dfTrain[, 1],
+                              categorical_feature = catFeatures)
+dataTest_lgbm <- lgb.Dataset(data = data.matrix(dfTest[, -1]),
+                             label = dfTest[, 1],
+                             categorical_feature = catFeatures)
+
+# Parameters for lightgbm
+myParams <- list(
+  boosting = "gbdt",
+  objective = "regression",
+  metric = "rmse",
+  learning_rate = 0.01,
+  feature_fraction = 1,
+  bagging_fraction = 1,
+  max_depth = -1
+)
+
+# Train model
+modelo <- lgb.train(params = myParams,
+                    data = dataTrain_lgbm,
+                    nrounds = 10000,
+                    valids = list(test = dataTest_lgbm),
+                    early_stopping_rounds = 500)
+
+#best iter: 1511
+#best score: 106.6549
+
+# Predictions
+predicciones <- predict(modelo, data.matrix(newDataTest %>%
+                                              select(-c(ID, DATOP, STD, STA,
+                                                        dia, minRetraso, maxRetraso, RicRetraso,
+                                                        fechaEspecial))), 
+                        num_iteration = modelo$best_iter)
+
+predicciones[predicciones < 0] <- 0
+x11();hist(predicciones)
+
+# Submission
+dataSample %>% 
+  select(ID) %>% 
+  mutate(target = predicciones) ->
+  lgbmR7
+
+# Export submission for zindi
+write.csv(lgbmR7, file = "../submission/lgbmR7Vuelos.csv", row.names = FALSE)
+```
+
+## Modelo 8
+
+```{r}
+# Load data
+load("../myData/Train2.Rdata")
+load("../myData/Test2.Rdata")
+dataSample <- data.table::fread("../data/sample.csv")
+
+newDataTrain <- as.data.frame(newDataTrain)
+newDataTest <- as.data.frame(newDataTest)
+
+# Selection of variables for analysis 
+library(tidyverse)
+dataTrain <- newDataTrain %>%
+  select(-c(ID, DATOP, STD, STA, fechaEspecial))
+
+# caret for partition data
+library(caret)
+set.seed(123)
+indx <- createDataPartition(y = dataTrain$target, times = 1, p = 0.80,
+                            list = FALSE)
+dfTrain <- dataTrain[indx, ]
+dfTest <- dataTrain[-indx, ]
+
+# Categorical features
+catFeatures <- names(
+  dataTrain %>% select_if(is.factor)
+)
+
+# Data for lightgbm
+library(lightgbm)
+dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dfTrain[, -1]),
+                              label = dfTrain[, 1],
+                              categorical_feature = catFeatures)
+dataTest_lgbm <- lgb.Dataset(data = data.matrix(dfTest[, -1]),
+                             label = dfTest[, 1],
+                             categorical_feature = catFeatures)
+
+# Parameters for lightgbm
+myParams <- list(
+  boosting = "gbdt",
+  objective = "regression",
+  metric = "rmse",
+  learning_rate = 0.01,
+  feature_fraction = 1,
+  bagging_fraction = 1,
+  max_depth = -1
+)
+
+# Train model
+modelo <- lgb.train(params = myParams,
+                    data = dataTrain_lgbm,
+                    nrounds = 10000,
+                    valids = list(test = dataTest_lgbm),
+                    early_stopping_rounds = 500)
+
+#best iter: 1504
+#best score: 105.7866
+
+# Predictions
+predicciones <- predict(modelo, data.matrix(newDataTest %>%
+                                              select(-c(ID, DATOP, STD, STA, fechaEspecial))), 
+                        num_iteration = modelo$best_iter)
+
+predicciones[predicciones < 0] <- 0
+x11();hist(predicciones)
+
+# Submission
+dataSample %>% 
+  select(ID) %>% 
+  mutate(target = predicciones) ->
+  lgbmR8
+
+# Export submission for zindi
+write.csv(lgbmR8, file = "../submission/lgbmR8Vuelos.csv", row.names = FALSE)
+```
+
+## Modelo 9
+
+```{r}
+# Load data
+load("../myData/Train2.Rdata")
+load("../myData/Test2.Rdata")
+dataSample <- data.table::fread("../data/sample.csv")
+
+newDataTrain <- as.data.frame(newDataTrain)
+newDataTest <- as.data.frame(newDataTest)
+
+# Selection of variables for analysis 
+library(tidyverse)
+dataTrain <- newDataTrain %>%
+  select(-c(ID, DATOP, STD, STA, fechaEspecial))
+
+# caret for partition data
+library(caret)
+set.seed(123)
+indx <- createDataPartition(y = dataTrain$target, times = 1, p = 0.90,
+                            list = FALSE)
+dfTrain <- dataTrain[indx, ]
+dfTest <- dataTrain[-indx, ]
+
+# Categorical features
+catFeatures <- names(
+  dataTrain %>% select_if(is.factor)
+)
+
+# Data for lightgbm
+library(lightgbm)
+dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dfTrain[, -1]),
+                              label = dfTrain[, 1],
+                              categorical_feature = catFeatures)
+dataTest_lgbm <- lgb.Dataset(data = data.matrix(dfTest[, -1]),
+                             label = dfTest[, 1],
+                             categorical_feature = catFeatures)
+
+# Parameters for lightgbm
+myParams <- list(
+  boosting = "gbdt",
+  objective = "regression",
+  metric = "rmse",
+  learning_rate = 0.01,
+  feature_fraction = 1,
+  bagging_fraction = 1,
+  max_depth = -1
+)
+
+# Train model
+modelo <- lgb.train(params = myParams,
+                    data = dataTrain_lgbm,
+                    nrounds = 30000,
+                    valids = list(test = dataTest_lgbm),
+                    early_stopping_rounds = 500)
+
+#best iter: 19519
+#best score: 102.1988
+
+# Predictions
+predicciones <- predict(modelo, data.matrix(newDataTest %>%
+                                              select(-c(ID, DATOP, STD, STA, fechaEspecial))), 
+                        num_iteration = modelo$best_iter)
+
+predicciones[predicciones < 0] <- 0
+x11();hist(predicciones)
+
+# Submission
+dataSample %>% 
+  select(ID) %>% 
+  mutate(target = predicciones) ->
+  lgbmR9
+
+# Export submission for zindi
+write.csv(lgbmR9, file = "../submission/lgbmR9Vuelos.csv",
+          row.names = FALSE)
+
+```
+
+## Modelo 10
+
+```{r}
+# Mod1 + KFold
+# Load data
+load("../myData/Train1.Rdata")
+load("../myData/Test1.Rdata")
+dataSample <- data.table::fread("../data/sample.csv")
+
+newDataTrain <- as.data.frame(newDataTrain)
+newDataTest <- as.data.frame(newDataTest)
+
+# Selection of variables for analysis 
+library(tidyverse)
+dataTrain <- newDataTrain %>%
+  select(-c(ID, DATOP, STD, STA))
+
+# Categorical features
+catFeatures <- names(
+  dataTrain %>% select_if(is.factor)
+)
+
+# caret for partition data with resample
+library(caret)
+set.seed(123)
+index <- createDataPartition(y = dataTrain$target, times = 10, p = 0.70,
+                             list = TRUE)
+
+# Parameters for lightgbm
+myParams <- list(
+  boosting = "gbdt",
+  objective = "regression",
+  metric = "rmse",
+  learning_rate = 0.1,
+  feature_fraction = 1,
+  bagging_fraction = 1,
+  max_depth = -1
+)
+
+# lightgbm with K-Fold manually (k = 10)
+library(lightgbm)
+k <- 10
+predTest <- list()
+bestScore <- c()
+for (i in 1:k) {
+  
+  # Data train and test
+  dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dataTrain[index[[i]], -1]),
+                                label = dataTrain[index[[i]], 1],
+                                categorical_feature = catFeatures)
+  dataTest_lgbm <- lgb.Dataset(data = data.matrix(dataTrain[-index[[i]], -1]),
+                               label = dataTrain[-index[[i]], 1],
+                               categorical_feature = catFeatures)
+  
+  # Train model
+  model <- lgb.train(params = myParams,
+                     data = dataTrain_lgbm,
+                     nrounds = 10000,
+                     valids = list(test = dataTest_lgbm),
+                     early_stopping_rounds = 500)
+  
+  # Predictions
+  predictions <- predict(model,
+                         data.matrix(newDataTest %>%
+                                       select(-c(ID, DATOP, STD, STA))),
+                         num_iteration = model$best_iter)
+  predTest[[i]] = predictions
+  
+  # Best score for iteration
+  bestScore[i] = model$best_score
+  
+  # Next iteration
+  cat("Iteration:==========", i, "RSME:==========", model$best_score, "Ready!")
+}
+
+# Mean predictions
+dataPred <- as.data.frame(predTest)
+names(dataPred) <- paste0("Mod", 1:10)
+predicciones <- apply(dataPred, 1, mean)
+
+predicciones[predicciones < 0] <- 0
+x11();hist(predicciones)
+
+# Submission
+dataSample %>% 
+  select(ID) %>% 
+  mutate(target = predicciones) ->
+  lgbmR10
+
+# Export submission for zindi
+write.csv(lgbmR10, file = "../submission/lgbmR10Vuelos.csv", row.names = FALSE)
+
+```
+
+## Modelo 11
+
+```{r}
+# Mod2 + KFold
+# Load data
+load("../myData/Train1.Rdata")
+load("../myData/Test1.Rdata")
+dataSample <- data.table::fread("../data/sample.csv")
+
+newDataTrain <- as.data.frame(newDataTrain)
+newDataTest <- as.data.frame(newDataTest)
+
+# Selection of variables for analysis 
+library(tidyverse)
+dataTrain <- newDataTrain %>%
+  select(-c(ID, DATOP, STD, STA))
+
+# Categorical features
+catFeatures <- names(
+  dataTrain %>% select_if(is.factor)
+)
+
+# caret for partition data with resample
+library(caret)
+set.seed(123)
+index <- createDataPartition(y = dataTrain$target, times = 10, p = 0.70,
+                             list = TRUE)
+
+# Parameters for lightgbm
+myParams <- list(
+  boosting = "gbdt",
+  objective = "regression",
+  metric = "rmse",
+  learning_rate = 0.1,
+  feature_fraction = 0.5,
+  bagging_fraction = 1,
+  min_data_in_leaf = 100,
+  num_leaves = 255,
+  max_depth = -1
+)
+
+# lightgbm with K-Fold manually (k = 10)
+library(lightgbm)
+k <- 10
+predTest <- list()
+bestScore <- c()
+for (i in 1:k) {
+  
+  # Data train and test
+  dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dataTrain[index[[i]], -1]),
+                                label = dataTrain[index[[i]], 1],
+                                categorical_feature = catFeatures)
+  dataTest_lgbm <- lgb.Dataset(data = data.matrix(dataTrain[-index[[i]], -1]),
+                               label = dataTrain[-index[[i]], 1],
+                               categorical_feature = catFeatures)
+  
+  # Train model
+  model <- lgb.train(params = myParams,
+                     data = dataTrain_lgbm,
+                     nrounds = 10000,
+                     valids = list(test = dataTest_lgbm),
+                     early_stopping_rounds = 500)
+  
+  # Predictions
+  predictions <- predict(model,
+                         data.matrix(newDataTest %>%
+                                       select(-c(ID, DATOP, STD, STA))),
+                         num_iteration = model$best_iter)
+  predTest[[i]] = predictions
+  
+  # Best score for iteration
+  bestScore[i] = model$best_score
+  
+  # Next iteration
+  cat("Iteration:==========", i, "RSME:==========", model$best_score, "Ready!")
+}
+
+# Mean predictions
+dataPred <- as.data.frame(predTest)
+names(dataPred) <- paste0("Mod", 1:10)
+predicciones <- apply(dataPred, 1, mean)
+
+predicciones[predicciones < 0] <- 0
+x11();hist(predicciones)
+
+# Submission
+dataSample %>% 
+  select(ID) %>% 
+  mutate(target = predicciones) ->
+  lgbmR11
+
+# Export submission for zindi
+write.csv(lgbmR11, file = "../submission/lgbmR11Vuelos.csv", row.names = FALSE)
+```
+
+## Modelo 12
+
+```{r}
+# Mod1 + KFold
+# Load data
+load("../myData/Train2.Rdata")
+load("../myData/Test2.Rdata")
+dataSample <- data.table::fread("../data/sample.csv")
+
+newDataTrain <- as.data.frame(newDataTrain)
+newDataTest <- as.data.frame(newDataTest)
+
+# Selection of variables for analysis 
+library(tidyverse)
+dataTrain <- newDataTrain %>%
+  select(-c(ID, DATOP, STD, STA))
+
+# Categorical features
+catFeatures <- names(
+  dataTrain %>% select_if(is.factor)
+)
+
+# caret for partition data with resample
+library(caret)
+set.seed(123)
+index <- createDataPartition(y = dataTrain$target, times = 10, p = 0.70,
+                             list = TRUE)
+
+# Parameters for lightgbm
+myParams <- list(
+  boosting = "gbdt",
+  objective = "regression",
+  metric = "rmse",
+  learning_rate = 0.01,
+  feature_fraction = 1,
+  bagging_fraction = 1,
+  max_depth = -1
+)
+
+# lightgbm with K-Fold manually (k = 10)
+library(lightgbm)
+k <- 10
+predTest <- list()
+bestScore <- c()
+for (i in 1:k) {
+  
+  # Data train and test
+  dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dataTrain[index[[i]], -1]),
+                                label = dataTrain[index[[i]], 1],
+                                categorical_feature = catFeatures)
+  dataTest_lgbm <- lgb.Dataset(data = data.matrix(dataTrain[-index[[i]], -1]),
+                               label = dataTrain[-index[[i]], 1],
+                               categorical_feature = catFeatures)
+  
+  # Train model
+  model <- lgb.train(params = myParams,
+                     data = dataTrain_lgbm,
+                     nrounds = 10000,
+                     valids = list(test = dataTest_lgbm),
+                     early_stopping_rounds = 500)
+  
+  # Predictions
+  predictions <- predict(model,
+                         data.matrix(newDataTest %>%
+                                       select(-c(ID, DATOP, STD, STA))),
+                         num_iteration = model$best_iter)
+  predTest[[i]] = predictions
+  
+  # Best score for iteration
+  bestScore[i] = model$best_score
+  
+  # Next iteration
+  cat("Iteration:==========", i, "RSME:==========", model$best_score, "Ready!")
+}
+
+# Mean predictions
+dataPred <- as.data.frame(predTest)
+names(dataPred) <- paste0("Mod", 1:10)
+predicciones <- apply(dataPred, 1, mean)
+
+predicciones[predicciones < 0] <- 0
+x11();hist(predicciones)
+
+# Submission
+dataSample %>% 
+  select(ID) %>% 
+  mutate(target = predicciones) ->
+  lgbmR12
+
+# Export submission for zindi
+write.csv(lgbmR12, file = "../submission/lgbmR12Vuelos.csv", row.names = FALSE)
+```
+

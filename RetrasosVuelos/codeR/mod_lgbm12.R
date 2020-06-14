@@ -31,8 +31,6 @@ myParams <- list(
   learning_rate = 0.01,
   feature_fraction = 1,
   bagging_fraction = 1,
-  #min_data_in_leaf = 100,
-  #num_leaves = 255,
   max_depth = -1
 )
 

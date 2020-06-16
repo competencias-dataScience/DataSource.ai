@@ -1,0 +1,112 @@
+---
+title: "Inclusión Financiera en Latinoamérica"
+subtitle: "Análisis Exploratorio"
+author: "Sidereus"
+output:
+  html_notebook:
+    code_folding: hide
+    df_print: paged
+    css: estilo.css
+    toc: true
+    toc_float:
+      smooth_scroll: false
+      collapsed: false
+    highlight: breezedark
+    
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = TRUE,
+                      fig.align = "center",
+                      fig.width = 9,
+                      warning = FALSE,
+                      message = FALSE)
+```
+
+<center>
+<img src = "img/img1.png" />
+</center>
+
+# Reto
+
+- [Reto en DataSource.ai](https://www.datasource.ai/es/home/competitions/inclusion-financiera-en-latinoamerica)
+
+# Datos
+
+```{r}
+library(data.table)
+dataTrain <- fread("../data/train.csv")
+dataTest <- fread("../data/test.csv")
+dataSample <- fread("../data/sample.csv")
+```
+
+# Variables Iniciales
+
+- **country:** país. En total hay 4 paises (Argentina, Chile, Colombia, Mexico). El de mayor registros es Chile con el 37.1% y el último es Mexico con 8.9% del total de información.
+- **year:** año del registro (2016 a 2018). No hay información de cada país en los tres años, por ejemplo, Argentina sólo tiene información en el año 2018 y Colombia sólo en 2017.
+- **uniqueid:** identificador único.
+- **bank_account:** acceso a cuenta bancaria (si, no). 85.9% no tienen acceso a cuenta bancaria.
+- **location_type:** tipo de ubicación (rural, urbana). El 60.9% de los registros son de ubicación rural.
+- **cellphone_acces:** acceso a celular (si, no). El 75% tienen acceso al celular.
+- **household_size:** número de personas que viven en una misma casa. Rango de 1 a 21 personas.
+- **age_of_respondent:** edad. Rango de 16 a 100 años.
+- **gender_of_respondent:** género. 58.9% de los registros son del género femenino.
+- **relationship_with_head:** relación con responsable de la familia (cónyuge, hijo, padre, otro pariente, otros no parientes, no sé). El 54.5% de las personas registradas son *cabeza de familia o jefe de hogar*, seguido del 27.7% de *cónyuges* y, en menor cantidad *otros no parientes* con menos del 1%.
+- **marital_status:** estado marital (Casado/Viviendo juntos, Divorciado/Separado, Viudo, Soltero/Nunca casado, No sé). El 45.6% de los registros corresponden a personas *casado/viviendo juntos*, seguido del 33.9% de *soltero/nunca casado).
+- **education_level:** nivel educativo más alto (Sin educación formal, Educación primaria, Educación secundaria, Formación profesional/Especializada, Educación terciaria, Otro/No sabe). El 54.3% cuentan con educación primaria como nivel máximo de estudio, seguido del 19.1% educados informalmente y 17.9% con educación secundaria. 
+- **job_type:** tipo de trabajo (Agricultura y pesca, Autónomo, Empleado formal Gobierno, Empleado formal Privado, Empleado informal, Dependiente de remesas, Dependiente del gobierno, Otros ingresos, Sin ingresos, No sabe/Se niega a responder). El mayor número de registros equivale a *personas que trabajan por cuenta propia* con 27.3%, seguido del *empleo informal* con 23.7%.
+
+# Nuevas variables
+
+- **ageAdult:** si la persona es mayor a 18 años lo categorizo como "si" de lo contrario será "no".
+- **sizeFamily:** tamaño del hogar. Creo una nueva variable categórica que clasifica el número de personas que viven en una misma casa. Los niveles son los siguientes:
+    - *Solo:* una sóla persona.
+    - *Pareja:* dos personas.
+    - *F3:* familia de 3 miembros.
+    - *F4:* familia de 4 miembros.
+    - *F5:* familia mayor o igual a 5 miembros.
+- **unemployment:** categorizo una nueva variable para clasificar si la persona está desempleada. Dentro de aquellos desempleados incluyo el trabajo informal independiente, sin ingresos, dependiente de remesas, otros ingresos y los que no responden.
+- **usefulLife:** si la persona está desempleada y además está entre 20-60 años de edad, lo clasifico como "Si", de lo contrario será "No".
+- **:**
+
+```{r}
+library(tidyverse)
+dataTrain %>% 
+  mutate(ageAdult = ifelse(age_of_respondent >= 18, "Si", "No"),
+         year = factor(year),
+         target = ifelse(bank_account == "Yes", 1, 0),
+         sizeFamily = if_else(
+           household_size == 1,
+           true = "Solo",
+           false = if_else(
+             household_size == 2,
+             true = "Pareja",
+             false = if_else(
+               household_size == 3,
+               true = "F3",
+               false = if_else(
+                 household_size == 4,
+                 true = "F4",
+                 false = "F5"
+               )
+             )
+           )
+         ),
+         unemployment = if_else(
+           job_type %in% c("Dont Know/Refuse to answer",
+                           "Informally employed",
+                           "No Income", "Other Income",
+                           "Remittance Dependent"),
+           true = "Si",
+           false = "No"
+         ),
+         usefulLife = if_else(
+           unemployment == "Si" & age_of_respondent %in% c(20:60),
+           true = "Si",
+           false = "No"
+         )) %>% 
+  select(-c(bank_account)) %>% 
+  mutate_if(is.character, as.factor)
+```
+

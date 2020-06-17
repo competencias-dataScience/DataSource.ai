@@ -52,8 +52,8 @@ modelo <- lgb.train(params = myParams,
                     valids = list(test = dataTest_lgbm),
                     early_stopping_rounds = 50)
 
-# best_iteration: 324
-# best_score: 0.8647347
+# best_iteration: 378
+# best_score: 0.8648245
 modelo$best_iter
 modelo$best_score
 

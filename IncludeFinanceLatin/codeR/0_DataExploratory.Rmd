@@ -8,6 +8,7 @@ output:
     df_print: paged
     css: estilo.css
     toc: true
+    toc_depth: 5
     toc_float:
       smooth_scroll: false
       collapsed: false
@@ -41,7 +42,7 @@ dataTest <- fread("../data/test.csv")
 dataSample <- fread("../data/sample.csv")
 ```
 
-# Variables Iniciales
+## Variables Iniciales
 
 - **country:** país. En total hay 4 paises (Argentina, Chile, Colombia, Mexico). El de mayor registros es Chile con el 37.1% y el último es Mexico con 8.9% del total de información.
 - **year:** año del registro (2016 a 2018). No hay información de cada país en los tres años, por ejemplo, Argentina sólo tiene información en el año 2018 y Colombia sólo en 2017.
@@ -57,7 +58,7 @@ dataSample <- fread("../data/sample.csv")
 - **education_level:** nivel educativo más alto (Sin educación formal, Educación primaria, Educación secundaria, Formación profesional/Especializada, Educación terciaria, Otro/No sabe). El 54.3% cuentan con educación primaria como nivel máximo de estudio, seguido del 19.1% educados informalmente y 17.9% con educación secundaria. 
 - **job_type:** tipo de trabajo (Agricultura y pesca, Autónomo, Empleado formal Gobierno, Empleado formal Privado, Empleado informal, Dependiente de remesas, Dependiente del gobierno, Otros ingresos, Sin ingresos, No sabe/Se niega a responder). El mayor número de registros equivale a *personas que trabajan por cuenta propia* con 27.3%, seguido del *empleo informal* con 23.7%.
 
-# Nuevas variables
+## Nuevas variables
 
 - **ageAdult:** si la persona es mayor a 18 años lo categorizo como "si" de lo contrario será "no".
 - **sizeFamily:** tamaño del hogar. Creo una nueva variable categórica que clasifica el número de personas que viven en una misma casa. Los niveles son los siguientes:
@@ -68,7 +69,8 @@ dataSample <- fread("../data/sample.csv")
     - *F5:* familia mayor o igual a 5 miembros.
 - **unemployment:** categorizo una nueva variable para clasificar si la persona está desempleada. Dentro de aquellos desempleados incluyo el trabajo informal independiente, sin ingresos, dependiente de remesas, otros ingresos y los que no responden.
 - **usefulLife:** si la persona está desempleada y además está entre 20-60 años de edad, lo clasifico como "Si", de lo contrario será "No".
-- **:**
+
+### Train
 
 ```{r}
 library(tidyverse)
@@ -106,7 +108,69 @@ dataTrain %>%
            true = "Si",
            false = "No"
          )) %>% 
+  unite(uniqueid, country, sep = " x ", col = "newID", remove = FALSE) %>% 
+  mutate_if(is.character, as.factor) %>% 
   select(-c(bank_account)) %>% 
-  mutate_if(is.character, as.factor)
+  select(newID, target, everything()) ->
+  myDataTrain
+myDataTrain
 ```
 
+### Test
+
+```{r}
+dataTest %>% 
+  mutate(ageAdult = ifelse(age_of_respondent >= 18, "Si", "No"),
+         year = factor(year),
+         sizeFamily = if_else(
+           household_size == 1,
+           true = "Solo",
+           false = if_else(
+             household_size == 2,
+             true = "Pareja",
+             false = if_else(
+               household_size == 3,
+               true = "F3",
+               false = if_else(
+                 household_size == 4,
+                 true = "F4",
+                 false = "F5"
+               )
+             )
+           )
+         ),
+         unemployment = if_else(
+           job_type %in% c("Dont Know/Refuse to answer",
+                           "Informally employed",
+                           "No Income", "Other Income",
+                           "Remittance Dependent"),
+           true = "Si",
+           false = "No"
+         ),
+         usefulLife = if_else(
+           unemployment == "Si" & age_of_respondent %in% c(20:60),
+           true = "Si",
+           false = "No"
+         )) %>% 
+  unite(uniqueid, country, sep = " x ", col = "newID", remove = FALSE) %>% 
+  mutate_if(is.character, as.factor) %>% 
+  select(newID, everything()) ->
+  myDataTest
+myDataTest
+```
+
+## Exportando datos
+
+```{r}
+save(myDataTrain, file = "myDataTrain.Rdata", compress = "xz")
+save(myDataTest, file = "myDataTest.Rdata", compress = "xz")
+```
+
+
+# Modelos
+
+## LightGBM
+
+- [Documentación de LightGBM.](https://lightgbm.readthedocs.io/en/latest/)
+- [Instalación de LightGBM en R.](https://lightgbm.readthedocs.io/en/latest/R/index.html)
+- [Parámetros del algoritmo LightGBM.](https://lightgbm.readthedocs.io/en/latest/Parameters.html)

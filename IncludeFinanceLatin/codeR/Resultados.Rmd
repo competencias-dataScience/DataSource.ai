@@ -1,0 +1,484 @@
+---
+title: "Inclusión Financiera en Latinoamérica"
+author: "Sidereus"
+output:
+  html_notebook:
+    code_folding: hide
+    df_print: paged
+    css: estilo.css
+    toc: true
+    toc_depth: 5
+    toc_float:
+      smooth_scroll: false
+      collapsed: false
+    highlight: breezedark
+    
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = TRUE,
+                      fig.align = "center",
+                      fig.width = 9,
+                      warning = FALSE,
+                      message = FALSE)
+```
+
+<center>
+<img src = "img/img1.png" />
+</center>
+
+# Reto
+
+- [Reto en DataSource.ai](https://www.datasource.ai/es/home/competitions/inclusion-financiera-en-latinoamerica)
+
+# Datos
+
+```{r}
+library(data.table)
+dataTrain <- fread("../data/train.csv")
+dataTest <- fread("../data/test.csv")
+dataSample <- fread("../data/sample.csv")
+```
+
+## Variables Iniciales
+
+- **country:** país. En total hay 4 paises (Argentina, Chile, Colombia, Mexico). El de mayor registros es Chile con el 37.1% y el último es Mexico con 8.9% del total de información.
+- **year:** año del registro (2016 a 2018). No hay información de cada país en los tres años, por ejemplo, Argentina sólo tiene información en el año 2018 y Colombia sólo en 2017.
+- **uniqueid:** identificador único.
+- **bank_account:** acceso a cuenta bancaria (si, no). 85.9% no tienen acceso a cuenta bancaria.
+- **location_type:** tipo de ubicación (rural, urbana). El 60.9% de los registros son de ubicación rural.
+- **cellphone_acces:** acceso a celular (si, no). El 75% tienen acceso al celular.
+- **household_size:** número de personas que viven en una misma casa. Rango de 1 a 21 personas.
+- **age_of_respondent:** edad. Rango de 16 a 100 años.
+- **gender_of_respondent:** género. 58.9% de los registros son del género femenino.
+- **relationship_with_head:** relación con responsable de la familia (cónyuge, hijo, padre, otro pariente, otros no parientes, no sé). El 54.5% de las personas registradas son *cabeza de familia o jefe de hogar*, seguido del 27.7% de *cónyuges* y, en menor cantidad *otros no parientes* con menos del 1%.
+- **marital_status:** estado marital (Casado/Viviendo juntos, Divorciado/Separado, Viudo, Soltero/Nunca casado, No sé). El 45.6% de los registros corresponden a personas *casado/viviendo juntos*, seguido del 33.9% de *soltero/nunca casado).
+- **education_level:** nivel educativo más alto (Sin educación formal, Educación primaria, Educación secundaria, Formación profesional/Especializada, Educación terciaria, Otro/No sabe). El 54.3% cuentan con educación primaria como nivel máximo de estudio, seguido del 19.1% educados informalmente y 17.9% con educación secundaria. 
+- **job_type:** tipo de trabajo (Agricultura y pesca, Autónomo, Empleado formal Gobierno, Empleado formal Privado, Empleado informal, Dependiente de remesas, Dependiente del gobierno, Otros ingresos, Sin ingresos, No sabe/Se niega a responder). El mayor número de registros equivale a *personas que trabajan por cuenta propia* con 27.3%, seguido del *empleo informal* con 23.7%.
+
+## Nuevas variables
+
+- **ageAdult:** si la persona es mayor a 18 años lo categorizo como "si" de lo contrario será "no".
+- **sizeFamily:** tamaño del hogar. Creo una nueva variable categórica que clasifica el número de personas que viven en una misma casa. Los niveles son los siguientes:
+    - *Solo:* una sóla persona.
+    - *Pareja:* dos personas.
+    - *F3:* familia de 3 miembros.
+    - *F4:* familia de 4 miembros.
+    - *F5:* familia mayor o igual a 5 miembros.
+- **unemployment:** categorizo una nueva variable para clasificar si la persona está desempleada. Dentro de aquellos desempleados incluyo el trabajo informal independiente, sin ingresos, dependiente de remesas, otros ingresos y los que no responden.
+- **usefulLife:** si la persona está desempleada y además está entre 20-60 años de edad, lo clasifico como "Si", de lo contrario será "No".
+
+### Train
+
+```{r}
+library(tidyverse)
+dataTrain %>% 
+  mutate(ageAdult = ifelse(age_of_respondent >= 18, "Si", "No"),
+         year = factor(year),
+         target = ifelse(bank_account == "Yes", 1, 0),
+         sizeFamily = if_else(
+           household_size == 1,
+           true = "Solo",
+           false = if_else(
+             household_size == 2,
+             true = "Pareja",
+             false = if_else(
+               household_size == 3,
+               true = "F3",
+               false = if_else(
+                 household_size == 4,
+                 true = "F4",
+                 false = "F5"
+               )
+             )
+           )
+         ),
+         unemployment = if_else(
+           job_type %in% c("Dont Know/Refuse to answer",
+                           "Informally employed",
+                           "No Income", "Other Income",
+                           "Remittance Dependent"),
+           true = "Si",
+           false = "No"
+         ),
+         usefulLife = if_else(
+           unemployment == "Si" & age_of_respondent %in% c(20:60),
+           true = "Si",
+           false = "No"
+         )) %>% 
+  unite(uniqueid, country, sep = " x ", col = "newID", remove = FALSE) %>% 
+  mutate_if(is.character, as.factor) %>% 
+  select(-c(bank_account)) %>% 
+  select(newID, target, everything()) ->
+  myDataTrain
+myDataTrain
+```
+
+### Test
+
+```{r}
+dataTest %>% 
+  mutate(ageAdult = ifelse(age_of_respondent >= 18, "Si", "No"),
+         year = factor(year),
+         sizeFamily = if_else(
+           household_size == 1,
+           true = "Solo",
+           false = if_else(
+             household_size == 2,
+             true = "Pareja",
+             false = if_else(
+               household_size == 3,
+               true = "F3",
+               false = if_else(
+                 household_size == 4,
+                 true = "F4",
+                 false = "F5"
+               )
+             )
+           )
+         ),
+         unemployment = if_else(
+           job_type %in% c("Dont Know/Refuse to answer",
+                           "Informally employed",
+                           "No Income", "Other Income",
+                           "Remittance Dependent"),
+           true = "Si",
+           false = "No"
+         ),
+         usefulLife = if_else(
+           unemployment == "Si" & age_of_respondent %in% c(20:60),
+           true = "Si",
+           false = "No"
+         )) %>% 
+  unite(uniqueid, country, sep = " x ", col = "newID", remove = FALSE) %>% 
+  mutate_if(is.character, as.factor) %>% 
+  select(newID, everything()) ->
+  myDataTest
+myDataTest
+```
+
+## Exportando datos
+
+```{r}
+save(myDataTrain, file = "myDataTrain.Rdata", compress = "xz")
+save(myDataTest, file = "myDataTest.Rdata", compress = "xz")
+```
+
+# Modelos
+
+- Evalué modelos ajustados con los algoritmos LightGB de Microsoft y CatBoost de Yandex.
+- En total envié 10 predicciones. 3 de ellas las obtuve con LightGBM y 6 con CatBoost, con el ensamble de estas 9 prediccciones obtuve la número 10.
+- Para algunos modelos permití que el algoritmo por defecto manejará las variables categóricas, sin embargo, para otros codifiqué las variables categóricas previamente, con [*one hot encoding.*](https://en.wikipedia.org/wiki/One-hot)
+- LightGBM:
+    - [Documentación.](https://lightgbm.readthedocs.io/en/latest/)
+    - [Instalación de LightGBM en R.](https://lightgbm.readthedocs.io/en/latest/R/index.html)
+    - [Parámetros del algoritmo LightGBM.](https://lightgbm.readthedocs.io/en/latest/Parameters.html)
+- CatBoost:
+    - [Documentación.](https://catboost.ai/docs/)
+    - [Instalación en R.](https://catboost.ai/docs/concepts/r-installation.html)
+    - [Parámetros en R.](https://catboost.ai/docs/concepts/r-training-parameters.html)
+    
+## LightGBM
+
+### Modelo 1
+
+```{r}
+# Bibliotecas
+library(caret)
+library(lightgbm)
+
+# Datos train
+dataTrain <- as.data.frame(myDataTrain) %>% 
+  select(-c(newID, uniqueid))
+
+# One-Hote Encoding (previous)
+library(recipes)
+rec <- recipe(target ~ ., data = dataTrain)
+dummies <- rec %>% 
+  step_dummy(all_nominal(), one_hot = TRUE)
+dummies <- prep(dummies, training = dataTrain)
+dataTrain2 <- bake(dummies, new_data = dataTrain) %>% 
+  select(target, everything()) %>% 
+  as.data.frame()
+
+# Datos test
+recTest <- recipe(~., data = myDataTest %>% select(-c(newID, uniqueid)))
+dumTest <- recTest %>% 
+  step_dummy(all_nominal(), one_hot = TRUE)
+dumTest <- prep(dumTest, training = myDataTest)
+dataTest2 <- bake(dumTest, new_data = myDataTest) %>%  
+  as.data.frame()
+
+# Partición de datos (80% train - 20% test)
+set.seed(123)
+indx <- createDataPartition(y = dataTrain2$target, times = 1, p = 0.8, list = FALSE)
+dfTrain <- dataTrain2[indx, ]
+dfTest <- dataTrain2[-indx, ]
+
+# Datos para lightgbm
+dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dfTrain[, -1]), 
+                              label = dfTrain[, 1])
+dataTest_lgbm <- lgb.Dataset(data = data.matrix(dfTest[, -1]),
+                             label = dfTest[, 1])
+
+# Parámetros para lightgbm
+myParams <- list(
+  boosting = "gbdt",
+  objective = "binary",
+  metric = 'auc',
+  learning_rate = 0.01,
+  feature_fraction = 1,
+  bagging_fraction = 1,
+  max_depth = -1,
+  is_unbalance = TRUE,
+  min_data_in_leaf = 100
+)
+
+# Train model
+modelo <- lgb.train(params = myParams,
+                    data = dataTrain_lgbm,
+                    nrounds = 10000,
+                    valids = list(test = dataTest_lgbm),
+                    early_stopping_rounds = 50)
+
+# best_iteration: 271
+# best_score: 0.8660
+modelo$best_iter
+modelo$best_score
+
+# --------- Predichos test (train)
+predicciones0 <- predict(modelo, data.matrix(dfTest %>% 
+                                               select(-target)))
+
+# Confusion matrix
+cut0.5 <- factor(ifelse(predicciones0 > 0.5, "1", "0"))
+confusionMatrix(data = cut0.5,
+                reference = factor(dfTest$target),
+                positive = "1")
+
+# --------- Predichos test (submission)
+
+# Predicciones
+predicciones1 <- predict(modelo, data.matrix(dataTest2))
+
+
+# Submission
+dataLGBM1 <- myDataTest %>% 
+  mutate(bank_account = if_else(predicciones1 > 0.5, "1", "0")) %>% 
+  select(uniqueid = newID, bank_account)
+write.csv(dataLGBM1, file = "submission/lgbm1.csv", row.names = FALSE)
+
+```
+
+### Modelo 2
+
+```{r}
+# Bibliotecas
+library(caret)
+library(lightgbm)
+
+# Datos train
+dataTrain <- as.data.frame(myDataTrain) %>% 
+  select(-c(newID, uniqueid))
+
+# One-Hote Encoding (previous)
+library(recipes)
+rec <- recipe(target ~ ., data = dataTrain)
+dummies <- rec %>% 
+  step_dummy(all_nominal(), one_hot = TRUE)
+dummies <- prep(dummies, training = dataTrain)
+dataTrain2 <- bake(dummies, new_data = dataTrain) %>% 
+  select(target, everything()) %>% 
+  as.data.frame()
+
+# Datos test
+recTest <- recipe(~., data = myDataTest %>% select(-c(newID, uniqueid)))
+dumTest <- recTest %>% 
+  step_dummy(all_nominal(), one_hot = TRUE)
+dumTest <- prep(dumTest, training = myDataTest)
+dataTest2 <- bake(dumTest, new_data = myDataTest) %>%  
+  as.data.frame()
+
+# Partición de datos (80% train - 20% test)
+set.seed(123)
+indx <- createDataPartition(y = dataTrain2$target, times = 1, p = 0.8, list = FALSE)
+dfTrain <- dataTrain2[indx, ]
+dfTest <- dataTrain2[-indx, ]
+
+# Datos para lightgbm
+dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dfTrain[, -1]), 
+                              label = dfTrain[, 1])
+dataTest_lgbm <- lgb.Dataset(data = data.matrix(dfTest[, -1]),
+                             label = dfTest[, 1])
+
+# Parámetros para lightgbm
+myParams <- list(
+  boosting = "gbdt",
+  objective = "binary",
+  metric = 'auc',
+  learning_rate = 0.001,
+  feature_fraction = 1,
+  bagging_fraction = 1,
+  max_depth = -1,
+  is_unbalance = TRUE,
+  min_data_in_leaf = 100
+)
+
+# Train model
+modelo <- lgb.train(params = myParams,
+                    data = dataTrain_lgbm,
+                    nrounds = 10000,
+                    valids = list(test = dataTest_lgbm),
+                    early_stopping_rounds = 50)
+
+# best_iteration: 1757
+# best_score: 0.8647503
+modelo$best_iter
+modelo$best_score
+
+# --------- Predichos test (train)
+predicciones0 <- predict(modelo, data.matrix(dfTest %>% 
+                                               select(-target)))
+
+# Confusion matrix
+cut0.5 <- factor(ifelse(predicciones0 > 0.5, "1", "0"))
+confusionMatrix(data = cut0.5,
+                reference = factor(dfTest$target),
+                positive = "1")
+
+# --------- Predichos test (submission)
+
+# Predicciones
+predicciones1 <- predict(modelo, data.matrix(dataTest2))
+
+
+# Submission
+dataLGBM3 <- myDataTest %>% 
+  mutate(bank_account = if_else(predicciones1 > 0.5, "1", "0")) %>% 
+  select(uniqueid = newID, bank_account)
+write.csv(dataLGBM3, file = "submission/lgbm3.csv", row.names = FALSE)
+```
+
+### Modelo 3
+
+```{r}
+# Cargando datos
+library(data.table)
+library(tidyverse)
+load("myDataTrain.Rdata")
+load("myDataTest.Rdata")
+dataSample <- fread("../data/sample.csv")
+
+
+# Bibliotecas
+library(caret)
+library(lightgbm)
+
+# Datos train
+dataTrain <- as.data.frame(myDataTrain) %>% 
+  select(-c(newID, uniqueid))
+
+# One-Hote Encoding (previous)
+library(recipes)
+rec <- recipe(target ~ ., data = dataTrain)
+dummies <- rec %>% 
+  step_dummy(all_nominal(), one_hot = TRUE)
+dummies <- prep(dummies, training = dataTrain)
+dataTrain2 <- bake(dummies, new_data = dataTrain) %>% 
+  select(target, everything()) %>% 
+  as.data.frame()
+
+# Datos test
+recTest <- recipe(~., data = myDataTest %>% select(-c(newID, uniqueid)))
+dumTest <- recTest %>% 
+  step_dummy(all_nominal(), one_hot = TRUE)
+dumTest <- prep(dumTest, training = myDataTest)
+dataTest2 <- bake(dumTest, new_data = myDataTest) %>%  
+  as.data.frame()
+
+# Partición de datos (80% train - 20% test)
+set.seed(123)
+indx <- createDataPartition(y = dataTrain2$target, times = 1, p = 0.8, list = FALSE)
+dfTrain <- dataTrain2[indx, ]
+dfTest <- dataTrain2[-indx, ]
+
+# Datos para lightgbm
+dataTrain_lgbm <- lgb.Dataset(data = data.matrix(dfTrain[, -1]), 
+                              label = dfTrain[, 1])
+dataTest_lgbm <- lgb.Dataset(data = data.matrix(dfTest[, -1]),
+                             label = dfTest[, 1])
+
+# Parámetros para lightgbm
+myParams <- list(
+  boosting = "gbdt",
+  objective = "binary",
+  metric = 'auc',
+  learning_rate = 0.001,
+  feature_fraction = 1,
+  bagging_fraction = 1,
+  max_depth = -1,
+  is_unbalance = TRUE,
+  min_data_in_leaf = 100,
+  num_leaves = 64,
+  subsample_for_bin = 200,
+  reg_alpha = 1.2,
+  reg_lambda = 1.2,
+  min_split_gain = 0.5,
+  min_child_weight = 1,
+  min_child_samples = 5,
+  scale_pos_weight = 1,
+  num_class = 1
+)
+
+# Train model
+modelo <- lgb.train(params = myParams,
+                    data = dataTrain_lgbm,
+                    nrounds = 10000,
+                    valids = list(test = dataTest_lgbm),
+                    early_stopping_rounds = 50)
+
+# best_iteration: 935
+# best_score: 0.8558094
+modelo$best_iter
+modelo$best_score
+
+# --------- Predichos test (train)
+predicciones0 <- predict(modelo, data.matrix(dfTest %>% 
+                                               select(-target)))
+
+# Confusion matrix
+cut0.5 <- factor(ifelse(predicciones0 > 0.5, "1", "0"))
+confusionMatrix(data = cut0.5,
+                reference = factor(dfTest$target),
+                positive = "1")
+
+# --------- Predichos test (submission)
+
+# Predicciones
+predicciones1 <- predict(modelo, data.matrix(dataTest2))
+
+
+# Submission
+dataLGBM4 <- myDataTest %>% 
+  mutate(bank_account = if_else(predicciones1 > 0.5, "1", "0")) %>% 
+  select(uniqueid = newID, bank_account)
+write.csv(dataLGBM4, file = "submission/lgbm4.csv", row.names = FALSE)
+
+```
+
+## CatBoost
+
+### Modelo 1
+
+### Modelo 2
+
+### Modelo 3
+
+### Modelo 4
+
+### Modelo 5
+
+### Modelo 6
+
+## Ensamble

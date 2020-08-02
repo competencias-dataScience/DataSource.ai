@@ -1,0 +1,164 @@
+---
+title: "Predicción de precio de apartamentos"
+subtitle: "Reto DataSource"
+author: "[Edimer (Sidereus)](https://edimer.github.io/)"
+output:
+  html_notebook:
+    toc: true
+    toc_float: 
+      smooth_scroll: false
+      collapsed: false
+    highlight: breezedark
+    theme: spacelab
+    css: estilo.css
+    code_folding: hide
+---
+
+<center>
+<img src = "../img/competencia.png" />
+</center>
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.align = "center")
+```
+
+- [Sitio oficial del reto en DataSource.](https://www.datasource.ai/es/home/competitions/prediccion-de-precios-de-apartamentos-en-argentina-y-colombia)
+
+# Variables
+
+<center>
+<img src = "../img/variables.png" />
+</center>
+
+# Datos Iniciales {.tabset .tabset-fade .tabset-pills}
+
+## Train
+
+```{r}
+library(data.table)
+train <- fread("../data/train.csv", encoding = "UTF-8")
+head(train)
+```
+
+## Test
+
+```{r}
+test <- fread("../data/test.csv", encoding = "UTF-8")
+head(test)
+```
+
+## Sample Submission
+
+```{r}
+sampleSub <- fread("../data/sampleSub.csv", encoding = "UTF-8")
+head(sampleSub)
+```
+# Exploratorio Train {.tabset .tabset-fade .tabset-pills}
+
+## Tamaño muestral
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(treemap)
+train %>% 
+  group_by(pais, provincia_departamento) %>% 
+  count(name = "total") %>% 
+  treemap(.,
+        index = c("pais","provincia_departamento"),
+        vSize = "total", 
+        type = "index", 
+        palette = c("#1C8356", "#C4451C"),
+        title = "Tamaño muestral: País - Departamento",   
+        fontsize.title = 12
+ 
+)
+
+     
+```
+
+```{r, message=FALSE, warning=FALSE}
+train %>% 
+  group_by(pais, rooms) %>% 
+  count(name = "total") %>% 
+  treemap(.,
+        index = c("pais","rooms"),
+        vSize = "total", 
+        type = "index", 
+        palette = c("#1C8356", "#C4451C"),
+        title = "Tamaño muestral: País - # de Salas",   
+        fontsize.title = 12
+ 
+)
+```
+
+```{r, message=FALSE, warning=FALSE}
+train %>% 
+  group_by(pais, bedrooms) %>% 
+  count(name = "total") %>% 
+  treemap(.,
+        index = c("pais","bedrooms"),
+        vSize = "total", 
+        type = "index", 
+        palette = c("#1C8356", "#C4451C"),
+        title = "Tamaño muestral: País - # de Dormitorios",   
+        fontsize.title = 12
+ 
+)
+```
+
+```{r, message=FALSE, warning=FALSE}
+train %>% 
+  group_by(pais, bathrooms) %>% 
+  count(name = "total") %>% 
+  treemap(.,
+        index = c("pais","bathrooms"),
+        vSize = "total", 
+        type = "index", 
+        palette = c("#1C8356", "#C4451C"),
+        title = "Tamaño muestral: País - # de Baños",   
+        fontsize.title = 12
+ 
+)
+```
+
+## Distribuciones
+
+- **Baños, Dormitorios y Salas:**
+
+```{r, fig.width=9, fig.height=3, warning=FALSE, message=FALSE}
+library(ggthemes)
+train %>% 
+  select(rooms, bedrooms, bathrooms) %>% 
+  gather() %>% 
+  group_by(key, value) %>% 
+  count(name = "Total") %>% 
+  ggplot(aes(x = value, y = Total)) +
+  facet_wrap(~key, scales = "free") +
+  geom_point(size = 2, color = "#C4451C") +
+  geom_segment(aes(y = 0, xend = value, yend = Total), color = "#1C8356") +
+  scale_x_continuous(n.breaks = 10) +
+  #geom_col(color = "black", fill = "#1C8356", width = 0.01) + 
+  theme_fivethirtyeight()
+
+```
+
+- **Precio y área en escala original y logarítmica:**
+
+```{r, fig.width=9, fig.height=5, warning=FALSE, message=FALSE}
+train %>% 
+  select(price, surface_total) %>% 
+  mutate(priceLog = log(price),
+         surfaceLog = log(surface_total)) %>% 
+  gather() %>% 
+  ggplot(aes(x = value)) +
+  facet_wrap(~key, scales = "free") +
+  geom_density(size = 0.8, color = "#C4451C", fill = "#1C8356", alpha = 0.7) +
+  theme_fivethirtyeight()
+
+```
+
+
+

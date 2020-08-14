@@ -277,19 +277,105 @@ datos_train <- training(split_inicial)
 datos_test  <- testing(split_inicial)
 ```
 
-## Preprocesamiento
+## Modelo GLM - Tuning
 
-```{r, warning=FALSE, message=FALSE}
-mi_receta <- recipe(formula = price ~ ., data =  datos_train) %>%
-               step_naomit(all_predictors()) %>%
-               step_nzv(all_predictors()) %>%
-               step_center(all_numeric(), -all_outcomes()) %>%
-               step_scale(all_numeric(), -all_outcomes()) %>%
-               step_dummy(all_nominal(), -all_outcomes())
-receta_prep <- prep(mi_receta)
-datos_train_prep <- bake(receta_prep, new_data = datos_train)
-datos_test_prep  <- bake(receta_prep, new_data = datos_test)
+```{r}
+# Modelo
+mod_glm <- linear_reg(mode    = "regression",
+                      penalty = tune(),
+                      mixture = tune()) %>%
+  set_engine(engine = "glmnet", lambda = 50)
+
+# Preprocesamiento
+receta <- recipe(formula = price ~ .,
+                 data =  datos_train) %>%
+  step_center(all_numeric(), -all_outcomes()) %>%
+  step_scale(all_numeric(), -all_outcomes()) %>%
+  step_dummy(all_nominal(), -all_outcomes())
+
+# Validación del modelo: validación cruzada K-folds con k = 10
+set.seed(1992)
+crossVal <- vfold_cv(data = datos_train,
+                     v = 10,
+                     strata = price)
+
+# WORKFLOW
+# =============================================================================
+flujo_modelo <- workflow() %>%
+  add_recipe(receta) %>%
+  add_model(mod_glm)
+
+# Grid de hiperparámetros
+hiperpar_grid <- grid_regular(
+  penalty(range = c(0, 1), trans = NULL),
+  mixture(range = c(0, 1), trans = NULL),
+  levels = c(10, 10))
+
+# EJECUCIÓN DE LA OPTIMIZACIÓN DE HIPERPARÁMETROS
+# =============================================================================
+registerDoParallel(cores = parallel::detectCores() - 1)
+myGrid <- tune_grid(
+  object = flujo_modelo,
+  resamples = crossVal,
+  metrics = metric_set(rmse),
+  control = control_resamples(save_pred = TRUE),
+  grid = hiperpar_grid
+)
+stopImplicitCluster()
 ```
 
+- **Mejores 10 modelos:**
 
+```{r}
+show_best(myGrid, metric = "rmse", n = 10)
+```
+
+## Modelo GLM Final
+
+```{r}
+mejorGrid <- select_best(myGrid, metric = "rmse")
+
+flujo_final <- finalize_workflow(x = flujo_modelo, parameters = mejorGrid)
+
+
+glm_final <-  flujo_final %>%
+  fit(data = datos_train)
+```
+
+## Predichos GLM
+
+```{r}
+predicciones <- glm_final %>%
+  predict(new_data = datos_test,
+          type = "numeric")
+```
+
+- **Error de test:**
+
+```{r}
+predicciones <- predicciones %>% 
+                bind_cols(datos_test %>% select(price))
+
+error_test_glm  <- rmse(
+  data = predicciones,
+  truth = price,
+  estimate = .pred,
+  na_rm = TRUE
+) %>%
+  mutate(modelo = "GLM")
+error_test_glm
+```
+
+## Predichos - Nuevos
+
+```{r}
+test2 <- test %>% 
+  select(-c(Id, property_type, operation_type, currency)) %>% 
+  mutate(rooms = factor(rooms),
+         bedrooms = factor(bedrooms),
+         bathrooms = factor(bathrooms))
+prediccionesGLM_Subm1 <- glm_final %>%
+  predict(new_data = test2,
+          type = "numeric")
+```
 

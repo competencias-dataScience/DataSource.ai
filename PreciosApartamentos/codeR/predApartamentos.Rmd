@@ -140,7 +140,6 @@ train %>%
   geom_point(size = 2, color = "#C4451C") +
   geom_segment(aes(y = 0, xend = value, yend = Total), color = "#1C8356") +
   scale_x_continuous(n.breaks = 10) +
-  #geom_col(color = "black", fill = "#1C8356", width = 0.01) + 
   theme_fivethirtyeight()
 
 ```
@@ -153,11 +152,143 @@ train %>%
   mutate(priceLog = log(price),
          surfaceLog = log(surface_total)) %>% 
   gather() %>% 
+  group_by(key) %>% 
+  summarise(media = mean(value, na.rm = TRUE),
+            de = sd(value, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  mutate(media_mas_1DE = media + de,
+         media_menos_1DE = media - de)->
+  medias
+
+train %>% 
+  select(price, surface_total) %>% 
+  mutate(priceLog = log(price),
+         surfaceLog = log(surface_total)) %>% 
+  gather() %>% 
   ggplot(aes(x = value)) +
   facet_wrap(~key, scales = "free") +
-  geom_density(size = 0.8, color = "#C4451C", fill = "#1C8356", alpha = 0.7) +
-  theme_fivethirtyeight()
+  geom_density(size = 0.5, color = "#C4451C", fill = "#1C8356", alpha = 0.5) +
+  geom_vline(data = medias, aes(xintercept = media),
+             color = "#C4451C", size = 1) +
+  geom_vline(data = medias, aes(xintercept = media_mas_1DE),
+             color = "#1C8356", size = 1, lty = 2) +
+  geom_vline(data = medias, aes(xintercept = media_menos_1DE),
+             color = "#1C8356", size = 1, lty = 2) +
+  theme_fivethirtyeight() +
+  labs(caption = "Línea sólida: promedio\nLínea punteada: +1 y -1 DE")
 
+```
+
+## Comparativos
+
+- **Distribución de precios y área por número de habitaciones:**
+
+```{r, fig.width=9, fig.height=5, warning=FALSE, message=FALSE}
+train %>% 
+  select(rooms, price, surface_total) %>% 
+  mutate(rooms = factor(rooms)) %>% 
+  mutate(priceLog = log(price),
+         surfaceLog = log(surface_total)) %>% 
+  gather(key = "key", value = "valor", -c(rooms)) %>% 
+  ggplot(aes(x = rooms, y = valor)) +
+  facet_wrap(~key, scales = "free") +
+  geom_boxplot(outlier.alpha = 0.01, fill = "#1C8356", alpha = 0.5,
+               color = "#C4451C", size = 0.1) +
+  stat_summary(fun.y = mean, geom = "point", color = "#C4451C", size = 2,
+               shape = 17) +
+  theme_fivethirtyeight() +
+  labs(caption = "Triángulo = promedio", subtitle = "Habitaciones")
+
+```
+
+- **Distribución de precios y área por número de dormitorios:**
+  
+```{r, fig.width=9, fig.height=5, warning=FALSE, message=FALSE}
+train %>% 
+  select(bedrooms, price, surface_total) %>% 
+  mutate(bedrooms = factor(bedrooms)) %>% 
+  mutate(priceLog = log(price),
+         surfaceLog = log(surface_total)) %>% 
+  gather(key = "key", value = "valor", -c(bedrooms)) %>% 
+  ggplot(aes(x = bedrooms, y = valor)) +
+  facet_wrap(~key, scales = "free") +
+  geom_boxplot(outlier.alpha = 0.01, fill = "#1C8356", alpha = 0.5,
+               color = "#C4451C", size = 0.1) +
+  stat_summary(fun.y = mean, geom = "point", color = "#C4451C", size = 2,
+               shape = 17) +
+  theme_fivethirtyeight() +
+  labs(caption = "Triángulo = promedio", subtitle = "Dormitorios")
+
+```
+
+- **Distribución de precios y área por número de baños:**
+  
+```{r, fig.width=9, fig.height=5, warning=FALSE, message=FALSE}
+train %>% 
+  select(bathrooms, price, surface_total) %>% 
+  mutate(bathrooms = factor(bathrooms)) %>% 
+  mutate(priceLog = log(price),
+         surfaceLog = log(surface_total)) %>% 
+  gather(key = "key", value = "valor", -c(bathrooms)) %>% 
+  ggplot(aes(x = bathrooms, y = valor)) +
+  facet_wrap(~key, scales = "free") +
+  geom_boxplot(outlier.alpha = 0.01, fill = "#1C8356", alpha = 0.5,
+               color = "#C4451C", size = 0.1) +
+  stat_summary(fun.y = mean, geom = "point", color = "#C4451C", size = 2,
+               shape = 17) +
+  theme_fivethirtyeight() +
+  labs(caption = "Triángulo = promedio", subtitle = "Baños")
+
+```
+
+## Dispersiones
+
+- **Relación general de área vs precio:** como son más de 25 mil observaciones es preferible utilizar `geom_bin2d()` en lugar de `geom_point()`.
+
+```{r, fig.width=9, fig.height=5, warning=FALSE, message=FALSE}
+train %>% 
+  ggplot(aes(x = surface_total, y = price)) +
+  geom_bin2d(color = "white", alpha = 0.8) +
+  scale_fill_gradient2(low = "white", mid = "#1C8356", high = "#C4451C") +
+  geom_smooth(method = "lm", color = "#C4451C", size = 2, se = FALSE) +
+  theme_fivethirtyeight() +
+  theme(legend.position = "right", legend.direction = "vertical")
+  
+```
+
+# Random Forest {.tabset .tabset-fade .tabset-pills}
+
+## Train - Test
+
+```{r}
+library(tidymodels)
+set.seed(123)
+datosTrain <- train %>% 
+  select(-c(Id, property_type, operation_type, currency)) %>% 
+  mutate(rooms = factor(rooms),
+         bedrooms = factor(bedrooms),
+         bathrooms = factor(bathrooms))
+split_inicial <- initial_split(
+                    data   = datosTrain,
+                    prop   = 0.8,
+                    strata = price
+                 )
+datos_train <- training(split_inicial)
+datos_test  <- testing(split_inicial)
+```
+
+## Preprocesamiento
+
+```{r, warning=FALSE, message=FALSE}
+mi_receta <- recipe(formula = price ~ ., data =  datos_train) %>%
+               step_naomit(all_predictors()) %>%
+               step_nzv(all_predictors()) %>%
+               step_center(all_numeric(), -all_outcomes()) %>%
+               step_scale(all_numeric(), -all_outcomes()) %>%
+               step_dummy(all_nominal(), -all_outcomes())
+receta_prep <- prep(mi_receta)
+datos_train_prep <- bake(receta_prep, new_data = datos_train)
+datos_test_prep  <- bake(receta_prep, new_data = datos_test)
 ```
 
 

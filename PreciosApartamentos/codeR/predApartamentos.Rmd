@@ -39,14 +39,22 @@ knitr::opts_chunk$set(echo = TRUE,
 
 ```{r}
 library(data.table)
-train <- fread("../data/train.csv", encoding = "UTF-8")
+train <- fread("../data/train.csv", encoding = "UTF-8") %>% 
+  select(-c(Id, property_type, operation_type, currency)) %>% 
+  mutate(rooms = factor(rooms),
+         bedrooms = factor(bedrooms),
+         bathrooms = factor(bathrooms))
 head(train)
 ```
 
 ## Test
 
 ```{r}
-test <- fread("../data/test.csv", encoding = "UTF-8")
+test <- fread("../data/test.csv", encoding = "UTF-8") %>% 
+  select(-c(Id, property_type, operation_type, currency)) %>% 
+  mutate(rooms = factor(rooms),
+         bedrooms = factor(bedrooms),
+         bathrooms = factor(bathrooms))
 head(test)
 ```
 
@@ -256,7 +264,7 @@ train %>%
   
 ```
 
-# Random Forest {.tabset .tabset-fade .tabset-pills}
+# GLMNET {.tabset .tabset-fade .tabset-pills}
 
 ## Train - Test
 
@@ -284,7 +292,7 @@ datos_test  <- testing(split_inicial)
 mod_glm <- linear_reg(mode    = "regression",
                       penalty = tune(),
                       mixture = tune()) %>%
-  set_engine(engine = "glmnet", lambda = 50)
+  set_engine(engine = "glmnet")
 
 # Preprocesamiento
 receta <- recipe(formula = price ~ .,
@@ -339,7 +347,7 @@ flujo_final <- finalize_workflow(x = flujo_modelo, parameters = mejorGrid)
 
 
 glm_final <-  flujo_final %>%
-  fit(data = datos_train)
+  fit(data = train)
 ```
 
 ## Predichos GLM
@@ -348,6 +356,7 @@ glm_final <-  flujo_final %>%
 predicciones <- glm_final %>%
   predict(new_data = datos_test,
           type = "numeric")
+predicciones[is.na(predicciones)] <- 0
 ```
 
 - **Error de test:**
@@ -368,14 +377,21 @@ error_test_glm
 
 ## Predichos - Nuevos
 
-```{r}
-test2 <- test %>% 
-  select(-c(Id, property_type, operation_type, currency)) %>% 
-  mutate(rooms = factor(rooms),
-         bedrooms = factor(bedrooms),
-         bathrooms = factor(bathrooms))
+```{r, warning=FALSE, message=FALSE}
 prediccionesGLM_Subm1 <- glm_final %>%
-  predict(new_data = test2,
+  predict(new_data = test,
           type = "numeric")
+prediccionesGLM_Subm1[is.na(prediccionesGLM_Subm1)] <- 0
+prediccionesGLM_Subm1[prediccionesGLM_Subm1 < 0 ] <- 0
+hist(prediccionesGLM_Subm1$.pred)
 ```
 
+- **Submission 1:**
+
+```{r}
+subm1_glmnet <- data.frame(Id = sampleSub$Id,
+                           price = prediccionesGLM_Subm1$.pred)
+write.csv(subm1_glmnet, file = "Subm1.csv", row.names = FALSE)
+```
+
+- **Score:** 2.72416885190957 - Posición 32.

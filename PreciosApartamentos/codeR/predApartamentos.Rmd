@@ -39,6 +39,7 @@ knitr::opts_chunk$set(echo = TRUE,
 
 ```{r}
 library(data.table)
+library(tidyverse)
 train <- fread("../data/train.csv", encoding = "UTF-8") %>% 
   select(-c(Id, property_type, operation_type, currency)) %>% 
   mutate(rooms = factor(rooms),
@@ -395,3 +396,70 @@ write.csv(subm1_glmnet, file = "Subm1.csv", row.names = FALSE)
 ```
 
 - **Score:** 2.72416885190957 - Posición 32.
+
+# Feature Engineering 1
+
+- Con la ciudad obtengo una nueva variable que informa si la ciudad es capital o no.
+- Obtengo una nueva variable en donde sumo las variables numéricas para cada fila.
+- Obtengo una nueva variable en donde promedio las variables numéricas para cada fila.
+- Obtengo una nueva variable para representar el tamaño de la casa en pequeña, mediana o grande.
+
+```{r}
+# Capitales para Colombia y Argentina
+capitales_colombia <- c("Armenia", "Barranquilla", "Bogotá D.C", "Bucaramanga",
+                        "Cali", "Cartagena", "Ibagué", "Medellín", "Neiva",
+                        "Popayán", "Santa Marta", "Tunja")
+capitales_argentina <- c("La Plata", "Córdoba", "Corrientes", "Paraná",
+                         "San Salvador de Jujuy", "Mendoza", "Posadas", "Neuquén",
+                         "Salta", "San Juan", "San Luis", "Santa Fe", "San Miguel")
+train %>% 
+  mutate(rooms = as.integer(as.character(rooms)),
+         bedrooms = as.integer(as.character(bedrooms)),
+         bathrooms = as.integer(as.character(bathrooms))) %>% 
+  mutate(Capital = if_else(pais == "Argentina" & ciudad %in% capitales_argentina,
+                           true = "Si",
+                           false = if_else(pais == "Colombia" & ciudad %in% capitales_colombia,
+                                           true = "Si", false = "No")),
+         sumaRow = rooms + bedrooms + bathrooms + surface_total,
+         mediaRow = sumaRow/4) %>% 
+   mutate(surfaceClass = if_else(surface_total <= 55, true = "Pequeña",
+                                false = if_else(
+                                  surface_total > 55 & surface_total <= 105,
+                                  true = "Mediana",
+                                  false = "Grande"
+                                ))) ->
+  newTrain1
+newTrain1  
+```
+
+- **Test:**
+
+```{r}
+test %>% 
+  mutate(rooms = as.integer(as.character(rooms)),
+         bedrooms = as.integer(as.character(bedrooms)),
+         bathrooms = as.integer(as.character(bathrooms))) %>% 
+  mutate(Capital = if_else(pais == "Argentina" & ciudad %in% capitales_argentina,
+                           true = "Si",
+                           false = if_else(pais == "Colombia" & ciudad %in% capitales_colombia,
+                                           true = "Si", false = "No")),
+         sumaRow = rooms + bedrooms + bathrooms + surface_total,
+         mediaRow = sumaRow/4) %>% 
+   mutate(surfaceClass = if_else(surface_total <= 55, true = "Pequeña",
+                                false = if_else(
+                                  surface_total > 55 & surface_total <= 105,
+                                  true = "Mediana",
+                                  false = "Grande"
+                                ))) ->
+  newTest1
+newTest1 
+```
+
+## Exportando datos
+
+```{r}
+save(newTrain1, file = "newTrain1.Rdata")
+save(newTest1, file = "newTest1.Rdata")
+```
+
+

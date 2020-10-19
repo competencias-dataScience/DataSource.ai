@@ -462,4 +462,54 @@ save(newTrain1, file = "newTrain1.Rdata")
 save(newTest1, file = "newTest1.Rdata")
 ```
 
+# Feature Engineering 2
+
+- Transformo las variables categóricas y en dummys (one hot encoding). La base de datos queda con 238 columnas.
+- Con estas variables realizo análisis de componentes principales y cluster.
+
+```{r}
+# ------- Test ----
+load("newTest1.Rdata")
+test <- newTest1 %>% 
+  mutate(rooms = factor(rooms),
+         bedrooms = factor(bedrooms),
+         bathrooms = factor(bathrooms)) %>% 
+  mutate_if(is.character, as.factor) %>% 
+  as.data.frame() 
+
+test_dummy <- dummy_cols(test) %>% 
+  select(-c(rooms, bedrooms, bathrooms, pais, provincia_departamento,
+            ciudad, Capital, surfaceClass))
+
+# ------- Train ----
+load("newTrain1.Rdata")
+train <- newTrain1 %>% 
+  mutate(rooms = factor(rooms),
+         bedrooms = factor(bedrooms),
+         bathrooms = factor(bathrooms)) %>% 
+  mutate_if(is.character, as.factor) %>% 
+  relocate(price) %>% 
+  as.data.frame()
+
+train_dummy <- dummy_cols(train) %>% 
+  select(-c(rooms, bedrooms, bathrooms, pais, provincia_departamento,
+            ciudad, Capital, surfaceClass))
+
+train_dummy2 <- train_dummy[, names(train_dummy) %in% names(test_dummy)]
+train_dummy2$price <- train$price
+
+test_dummy2 <-  test_dummy[, names(test_dummy) %in% names(train_dummy2)]
+train_dummy2
+```
+
+## ACP
+
+```{r}
+library(FactoMineR)
+library(factoextra)
+
+acp <- PCA(X = train_dummy2 %>% select(-price),
+           scale.unit = TRUE, ncp = 10, graph = FALSE)
+summary(acp)
+```
 

@@ -1,0 +1,533 @@
+---
+title: "Predicción del rating de Las aplicaciones en Google Play Store"
+subtitle: "Reto DataSource"
+author: "[Edimer (Sidereus)](https://edimer.github.io/)"
+output:
+  html_notebook:
+    toc: true
+    toc_float: 
+      smooth_scroll: false
+      collapsed: false
+    highlight: pygments
+    theme: spacelab
+    css: estilo.css
+    code_folding: hide
+---
+
+<center>
+<img src = "../img/competencia.png" />
+</center>
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.align = "center")
+```
+
+- [Sitio oficial del reto en DataSource.](https://www.datasource.ai/es/home/data-science-competitions-for-startups/prediciendo-el-rating-de-las-aplicaciones-en-google-play-store)
+
+# Variables
+
+<center>
+<img src = "../img/variables.PNG" />
+</center>
+
+# Datos Iniciales {.tabset .tabset-fade .tabset-pills}
+
+## Train
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+train <- read_csv("../data/train.csv") %>% 
+  mutate_if(is.character, as.factor)
+head(train)
+```
+
+## Test
+
+```{r, message=FALSE, warning=FALSE}
+test <- read_csv("../data/test.csv") %>% 
+  mutate_if(is.character, as.factor)
+head(test)
+```
+
+## Sample Submission
+
+```{r, message=FALSE, warning=FALSE}
+sampleSub <- read_csv("../data/sample_submission.csv")
+head(sampleSub)
+```
+
+# Descriptivo  {.tabset .tabset-fade .tabset-pills}
+
+- No hay apps repetidas.
+
+```{r}
+dim(train)
+dim(test)
+```
+
+
+## Train
+
+```{r}
+skimr::skim(train)
+```
+
+## Test
+
+```{r}
+skimr::skim(test)
+```
+
+# Depuración
+
+- La variable size está como carácter y en realidad podría ser tratada como un numéro, por tal motivo se crea una nueva variable que tiene el tamaño de la aplicación. Como están dadas en diferentes unidades (mega, kilo) se llevan a una sola unidad, en este caso a kilobytes (multiplicando las que están en megabytes [por 1024 (binario).](https://www.gbmb.org/mb-to-kb#:~:text=1%20Megabyte%20is%20equal%20to,to%201024%20kilobytes%20(binary).)).
+- El número de descargas (installs) se convierte a numérico
+- El precio de la aplicación se convierte a numérico
+- La variable *género* de la aplicación inicialmente cuenta con 107 niveles (géneros) diferentes, sin embargo, están codificados por dos descripciones separadas por punto y coma, de tal manera que muchos de estos niveles se repiten; por tal motivo separo esta variable en el **punto y coma** y sólo utilizo la primera columna resultante. En esta nueva variable unifico algunos *géneros*, por ejemplo, para la música aparecen dos: *Music* y *Muscis & Audio*, recodifico uno de los dos. Quedan 46 géneros diferentes.
+- La fecha de actualización se convierte a tipo *Date*. Primero separo las tres columnas mes, día y año *-- orden en el que vienen --* conformando tres nuevas variables, con estas tres nuevamente uno las fechas en el orden año/mes/día y se convierte a formato *Date*.
+- La versión actual de la aplicación inicialmente tiene 1947 niveles, sin embargo, la variación es alta por el número de subversiones que manejan. Por ejemplo, una app puede estar en su versión 1.1, otra podría estar en 1.1.1.0, ambas están en el nivel 1, no obstante, son niveles diferentes. En este caso voy a seperar la variable "Current ver" donde está el punto (1.1.1), dando lugar con ello a nuevas variables, la primera de ellas informará acerca de la versión de la app, sin tener en cuenta las subversiones. Esta variable es la que voy a incluir en el análisisi como "new_version" haciendo referencia a la versión de la app, con la segunda variable (seguida del punto) creo una nueva variable de nombre "new_subversion", haciendo referencia a la subversión de la app. Para la versión valores superiores a 25 (sólo el 1%) les asigno NA y para la subversión valores por encima del 50 les asigno NA (sólo el 3%).
+- La versión mínima requerida de android también la obtengo como numérica.
+- Finalmente selecciono sólo aquellas variables que van a ingresar al análisis. 
+
+## Train
+
+```{r, warning=FALSE, message=FALSE}
+train  %>% 
+  mutate(new_size = extract_numeric(Size),
+         unit_size = str_extract(Size, "[A-Z | a-z]+"),
+         size_kb = if_else(unit_size == "M", true = new_size * 1000,
+                           false = new_size),
+         new_installs = extract_numeric(Installs),
+         new_price = extract_numeric(Price)) %>% 
+  separate(Genres, into = c("new_genres", "new_genre2"), sep = ";",
+           remove = FALSE) %>% 
+  mutate(new_genres = gsub("Music & Audio", "Music", new_genres),
+         new_genres = gsub("Educational", "Education", new_genres)) %>% 
+  separate(`Last Updated`, into = c("new_month", "new_day", "new_year"), sep = " ",
+           remove = FALSE) %>% 
+  mutate(new_day = extract_numeric(new_day),
+         new_month = factor(new_month,
+                            levels = c("January", "February", "March", "April",
+                                       "May", "June", "July", "August", "September",
+                                       "October", "November", "December")),
+         new_month_num = as.integer(new_month),
+         new_year = as.numeric(new_year)) %>% 
+  unite(new_year, new_month_num, new_day, col = "date_update",
+        remove = FALSE, sep = "/") %>% 
+  mutate(date_update = as.Date(date_update, format = "%Y/%m/%d")) %>% 
+  separate(`Current Ver`, into = c("v1", "v2", "v3", "v4", "v5", "v6"), sep = "[.]",
+           remove = FALSE) %>% 
+  mutate(new_version = as.numeric(v1),
+         new_version = ifelse(new_version > 25, NA, new_version),
+         new_subversion = as.numeric(v2),
+         new_subversion = ifelse(new_subversion > 50, NA, new_subversion),
+         min_android = extract_numeric(`Android Ver`),
+         Category = Hmisc::capitalize(tolower(Category))) %>% 
+  select(-c(new_genre2, v1:v6, `Android Ver`, ID, Size, Installs, Price, 
+            Genres, `Last Updated`, `Current Ver`, new_size, unit_size,
+            new_month)) %>% 
+  rename(content_rating = `Content Rating`) %>% 
+  mutate_if(is.character, as.factor) ->
+  new_train1
+head(new_train1)
+```
+
+## Test
+
+```{r, warning=FALSE, message=FALSE}
+test  %>% 
+  mutate(new_size = extract_numeric(Size),
+         unit_size = str_extract(Size, "[A-Z | a-z]+"),
+         size_kb = if_else(unit_size == "M", true = new_size * 1000,
+                           false = new_size),
+         new_installs = extract_numeric(Installs),
+         new_price = extract_numeric(Price)) %>% 
+  separate(Genres, into = c("new_genres", "new_genre2"), sep = ";",
+           remove = FALSE) %>% 
+  mutate(new_genres = gsub("Music & Audio", "Music", new_genres),
+         new_genres = gsub("Educational", "Education", new_genres)) %>% 
+  separate(`Last Updated`, into = c("new_month", "new_day", "new_year"), sep = " ",
+           remove = FALSE) %>% 
+  mutate(new_day = extract_numeric(new_day),
+         new_month = factor(new_month,
+                            levels = c("January", "February", "March", "April",
+                                       "May", "June", "July", "August", "September",
+                                       "October", "November", "December")),
+         new_month_num = as.integer(new_month),
+         new_year = as.numeric(new_year)) %>% 
+  unite(new_year, new_month_num, new_day, col = "date_update",
+        remove = FALSE, sep = "/") %>% 
+  mutate(date_update = as.Date(date_update, format = "%Y/%m/%d")) %>% 
+  separate(`Current Ver`, into = c("v1", "v2", "v3", "v4", "v5", "v6"), sep = "[.]",
+           remove = FALSE) %>% 
+  mutate(new_version = as.numeric(v1),
+         new_version = ifelse(new_version > 25, NA, new_version),
+         new_subversion = as.numeric(v2),
+         new_subversion = ifelse(new_subversion > 50, NA, new_subversion),
+         min_android = extract_numeric(`Android Ver`),
+         Category = Hmisc::capitalize(tolower(Category))) %>% 
+  select(-c(new_genre2, v1:v6, `Android Ver`, ID, Size, Installs, Price, 
+            Genres, `Last Updated`, `Current Ver`, new_size, unit_size,
+            new_month)) %>% 
+  rename(content_rating = `Content Rating`) %>% 
+  mutate_if(is.character, as.factor) ->
+  new_test1
+head(new_test1)
+```
+
+# Exploratorio  {.tabset .tabset-fade .tabset-pills}
+
+## Categóricas
+
+```{r, fig.width=8, warning=FALSE, message=FALSE, fig.height=12}
+library(DataExplorer)
+plot_bar(new_train1, ggtheme = theme_light())
+  
+```
+
+## Numéricas
+
+- **Originales:**
+
+```{r, fig.width=9}
+plot_boxplot(new_train1 %>% mutate(Rating = as.factor(Rating)), by = "Rating",
+             ggtheme = theme_light())
+```
+
+- **Logaritmos:**
+
+```{r, fig.width=9}
+plot_boxplot(new_train1 %>%
+               mutate(Rating = as.factor(Rating)) %>% 
+               mutate_if(is.numeric, log), by = "Rating",
+             ggtheme = theme_light())
+```
+
+- **Q-Q Plot (logaritmos):**
+
+```{r, fig.width=9, fig.height=8}
+plot_qq(new_train1 %>%
+               mutate(Rating = as.factor(Rating)) %>% 
+               mutate_if(is.numeric, log), by = "Rating",
+             ggtheme = theme_light(), ncol = 3, nrow = 4)
+```
+
+
+- **Dispersión de precio vs otras (logaritmos):**
+
+```{r, fig.width=9, fig.height=12}
+plot_scatterplot(new_train1 %>%
+               mutate(Rating = as.factor(Rating)) %>% 
+               mutate_if(is.numeric, log),
+               by = "new_price",
+               ggtheme = theme_light(), ncol = 4, nrow = 4)
+```
+
+
+## Correlaciones
+
+- **Originales:**
+
+```{r, fig.width=9, fig.height=10, message=FALSE}
+plot_correlation(new_train1)
+```
+
+## Valores NA
+
+```{r}
+plot_missing(new_train1)
+```
+
+
+# Exportar datos 1
+
+```{r}
+save(new_train1, file = "../data/my_train1.Rdata")
+save(new_test1, file = "../data/my_test1.Rdata")
+```
+
+# Modelos
+
+## Basal - KNN
+
+- Para entrenar los modelos utilizo la biblioteca [mlr3](https://mlr3.mlr-org.com/) (nueva versión de [mlr](https://mlr-org.com/)) junto con otras bibliotecas que conforman el [mlr3verse.](https://github.com/mlr-org/mlr3verse)
+- 
+
+```{r}
+# Cargando datos
+load("../data/my_train1.Rdata")
+load("../data/my_test1.Rdata")
+```
+
+- Para los primeros modelos imputo los datos numéricos con la mediana:
+
+```{r}
+# Train
+new_train1$size_kb[is.na(new_train1$size_kb)] <- median(new_train1$size_kb, na.rm = TRUE)
+new_train1$new_version[is.na(new_train1$new_version)] <- median(new_train1$new_version, na.rm = TRUE)
+new_train1$new_subversion[is.na(new_train1$new_subversion)] <- median(new_train1$new_subversion, na.rm = TRUE)
+new_train1$min_android[is.na(new_train1$min_android)] <- median(new_train1$min_android, na.rm = TRUE)
+
+# Test
+new_test1$size_kb[is.na(new_test1$size_kb)] <- median(new_test1$size_kb, na.rm = TRUE)
+new_test1$new_version[is.na(new_test1$new_version)] <- median(new_test1$new_version, na.rm = TRUE)
+new_test1$new_subversion[is.na(new_test1$new_subversion)] <- median(new_test1$new_subversion, na.rm = TRUE)
+new_test1$min_android[is.na(new_test1$min_android)] <- median(new_test1$min_android, na.rm = TRUE)
+```
+
+- **Bibliotecas:**
+
+```{r}
+library(data.table)
+library(ggplot2)
+library(mlr3)
+library(mlr3learners)
+library(mlr3tuning)
+library(paradox)
+```
+
+- **Tema para gráficos:**
+
+```{r}
+theme_set(theme_light())
+```
+
+- **Ajustando datos para mlr3:**
+
+```{r}
+new_train1 <- new_train1 %>%
+  mutate(date_update = as.POSIXct(date_update),
+         Rating = factor(Rating)) %>% 
+  select(-c(date_update, App))
+
+new_test1 <- new_test1 %>% 
+  mutate(date_update = as.POSIXct(date_update)) %>% 
+  select(-c(date_update, App))
+```
+
+
+- **1. Definiendo la tarea de machine learning:**
+
+```{r}
+task <- TaskClassif$new(id = "rating_app", backend = new_train1,
+                        target = "Rating")
+task
+```
+
+- **2. Método de evaluación:** en este caso validación cruzada con k = 10. Más adelante podría usar estas mismas particiones para comparar modelos correctamente, por tal razón se fija dicha configuración.
+
+```{r}
+# Cross validation k-fold
+set.seed(2020)
+cv10_instance <- rsmp("cv", folds = 10)
+
+# Fijando particiones
+cv10_instance$instantiate(task = task)
+
+cv10_instance$instance %>% 
+  head()
+```
+
+- **3. Modelo KNN con [kernel rectangular](https://www.rdocumentation.org/packages/kknn/versions/1.3.1/topics/kknn):**
+
+```{r}
+knn <- lrn("classif.kknn", predict_type = "prob")
+knn$param_set$values$kernel <- "rectangular"
+knn
+```
+
+- **4. Parámetros a optimizar:**
+
+```{r}
+knn$param_set
+```
+
+- En este caso voy a incorporar valores para optimizar en "k" y "distance".
+
+```{r}
+search_space <- ParamSet$new(list(
+  ParamInt$new("k", lower = 3, upper = 10),
+  ParamInt$new("distance", lower = 1, upper = 4)
+))
+```
+
+- **5. Representación del problema a optimizar (tuning):** la métrica para probar los modelos es la [F1 Score](https://en.wikipedia.org/wiki/F1_score). Definida en la competencia.
+
+```{r}
+instance_grid <- TuningInstanceSingleCrit$new(
+  task = task,
+  learner = knn,
+  resampling = cv10_instance,
+  measure = msr("classif.fbeta"),
+  search_space = search_space,
+  terminator = trm("none")
+)
+```
+
+- **6. Grid Search:**
+
+```{r}
+set.seed(2020)
+tuner_grid <- tnr("grid_search", resolution = 18, batch_size = 36)
+```
+
+- **7. Ejecutar optimizador sobre tuning:** tiempo de ejecución aproximado a 8 minutos.
+
+```{r}
+tuner_grid$optimize(instance_grid)
+```
+
+- Resultados de la optimización de hiperparámetros: los mejores resultados se consiguen con distancias de 4 y bajo número de vecinos (< 4).
+
+```{r}
+instance_grid$archive$data() %>% 
+  ggplot(aes(x = k, y = classif.fbeta, color = factor(distance))) +
+  geom_point(size = 3) +
+  geom_line() +
+  labs(color = "distance") +
+  scale_color_brewer(palette = "Set1")
+```
+
+## Tuning KNN
+
+- En este caso se va a ampliar el rango de búsqueda de hiperparámetros. Los valores de k estarán optimizados de forma logarítmica y se usa la función exp() para transformar el hiperparámetro y poderlo visualizar en la escala original.
+- La distancia se optimiza en escala continua
+- Se agregan más tipos de kernel para ver cuál funciona mejor
+- Se escalan las variables numéricas
+- **Nota:** como se están optimizando "k" en logaritmo, es neceario introducir una función que permita la transformación inversa "trafo".
+
+```{r}
+# Espacio de búsqueda
+large_searchspace <- ParamSet$new(list(
+  ParamDbl$new("k", lower = log(2), upper = log(50)),
+  ParamDbl$new("distance", lower = 1, upper = 5),
+  ParamFct$new("kernel", c("rectangular", "gaussian", "rank", "optimal")),
+  ParamLgl$new("scale")
+))
+
+# Función para transformación
+large_searchspace$trafo <- function(x, param_set){
+  x$k = round(exp(x$k))
+  x
+}
+```
+
+- **Tuning Random Search:** en este caso se realizan 36 evaluaciones. Este número es elegido al azar entre todas las opciones posibles del espacio de búsqueda anterior.
+
+```{r}
+# Tipo de tuning
+tuner_random <- tnr("random_search", batch_size = 36)
+
+instance_random <- TuningInstanceSingleCrit$new(
+  task = task,
+  learner = knn,
+  resampling = cv10_instance,
+  measure = msr("classif.fbeta"),
+  search_space = large_searchspace,
+  terminator = trm("evals", n_evals = 36)
+)
+```
+
+- **Entrenamiento de modelos:** aproximadamente 15 minutos de ejecución.
+
+```{r}
+tuner_random$optimize(instance_random)
+```
+
+- **Resultados del ajuste:**
+
+```{r}
+instance_random$archive$data()
+```
+
+- Como los valores de "k" están dados en logaritmos pero internamente se pasó la función para transformarlos, están contenidos en la variable "x_domain".
+
+```{r}
+instance_random$archive$data(unnest = "x_domain")
+```
+
+- ¿Resultó útil escalar las variables para este algoritmo? el gráfico permite intuir que no es provechoso en términos de rendimiento predictivo esclar las variables numéricas.
+
+```{r}
+instance_random$archive$data(unnest = "x_domain") %>% 
+  ggplot(aes(x = x_domain_k, y = classif.fbeta, color = scale)) +
+  geom_point(size = 3) +
+  geom_line() +
+  labs(x = "k")
+```
+
+- ¿Cuál kernel proporciona mejores resultados? el kernel rectangular funciona bien con "k" bajo. Los kernel rank y gaussian proporcionan buenos resultados con "k" entre 10 y 20.
+
+```{r}
+instance_random$archive$data(unnest = "x_domain") %>% 
+  ggplot(aes(x = x_domain_k, y = classif.fbeta, color = kernel)) +
+  geom_point(size = 3) +
+  geom_line() +
+  labs(x = "k") +
+  scale_color_brewer(palette = "Set1")
+```
+
+## Mejores modelos
+
+- **Modelo KNN basal (grid search):**
+  - k = 3
+  - distance = 2
+
+```{r}
+instance_grid$result
+```
+
+
+- **Modelo KNN Tuning (random search):**
+  - k = 5
+  - kernel = rectangular
+  - scale = FALSE
+  - distance = 1.164304
+
+```{r}
+instance_random$archive$data(unnest = "x_domain") %>% 
+  arrange(desc(classif.fbeta)) %>% 
+  slice(1)
+```
+
+## Modelo final
+
+```{r}
+#Tarea
+task_final <- TaskClassif$new(id = "rating_app2",
+                              backend = new_train1,
+                              target = "Rating")
+
+
+# Algoritmo con hiperparámetros sintonizados
+knn_final <- lrn("classif.kknn", predict_type = "prob")
+knn_final$param_set$values$kernel <- "rectangular"
+knn_final$param_set$values$distance <- 1.164304
+knn_final$param_set$values$k <- 5
+
+# Entrenamiento
+knn_final$train(task_final)
+```
+
+## Predicciones
+
+```{r, warning=FALSE, message=FALSE}
+#Predicciones
+predict_prob <- knn_final$predict_newdata(newdata = new_test1)
+
+# Submission
+sampleSub %>% 
+  select(-rating) %>% 
+  mutate(rating = predict_prob$data$response) ->
+  sub_01_knn
+head(sub_01_knn)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_01_knn, file = "../submission/knn_01.csv")
+```

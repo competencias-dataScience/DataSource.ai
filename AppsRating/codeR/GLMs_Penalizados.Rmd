@@ -1,0 +1,588 @@
+---
+title: "Predicción del rating de Las aplicaciones en Google Play Store"
+subtitle: "Reto DataSource"
+author: "[Edimer (Sidereus)](https://edimer.github.io/)"
+output:
+  html_notebook:
+    toc: true
+    toc_float: 
+      smooth_scroll: false
+      collapsed: false
+    highlight: pygments
+    theme: spacelab
+    css: estilo.css
+    code_folding: hide
+---
+
+<center>
+<img src = "../img/competencia.png" />
+</center>
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.align = "center")
+```
+
+- [Sitio oficial del reto en DataSource.](https://www.datasource.ai/es/home/data-science-competitions-for-startups/prediciendo-el-rating-de-las-aplicaciones-en-google-play-store)
+
+# Variables
+
+<center>
+<img src = "../img/variables.PNG" />
+</center>
+
+# Datos
+
+```{r, warning=FALSE, message=FALSE}
+# Cargando datos
+load("../data/my_train1.Rdata")
+load("../data/my_test1.Rdata")
+sampleSub <- read_csv("../data/sample_submission.csv")
+head(new_train1)
+```
+
+- Selecciono sólo las variables que van a ingresar al análisis.
+
+```{r}
+library(tidyverse)
+
+mi_train <- new_train1 %>% 
+  select(-c(App, date_update))
+
+mi_test <- new_test1 %>% 
+  select(-c(App, date_update))
+```
+
+# Exploración {.tabset .tabset-fade .tabset-pills}
+
+- El análisis exploratorio en este caso muestra evidencias de relaciones lineales y no lineales. La variable que podría ser de mayor importancia para clasificar el rating de las aplicaciones es el número de reseñas.
+- Los gráficos de dispersión muestran tendencias diferentes para aplicaciones exitosas y no exitosas.
+- Aplicar la transformación logarítmica podría ser de utilidad para mejorar la clasificación.
+- Tanto para [análisis de componentes principales]() como para [UMAP](https://arxiv.org/abs/1802.03426) sólo uso las variables numéricas, no tuve en cuenta en este análisis las variables categóricas, aunque podrían haber ingresado al análisis como variables dummy.
+
+## Densidades Logaritmos
+
+```{r, fig.width=9}
+# Definiendo tema y colores para gráficos
+theme_set(theme_bw())
+colores <- c("#5B6DC8", "#D33B44")
+
+mi_train %>% 
+  select_if(is.numeric) %>% 
+  select(-new_year) %>% 
+  mutate(Rating = as.factor(Rating)) %>% 
+  pivot_longer(cols = !Rating, names_to = "variable", values_to = "valores") %>% 
+  ggplot(aes(x = valores, fill = Rating, color = Rating)) +
+  facet_wrap(~variable, scales = "free", ncol = 3, nrow = 3) +
+  geom_density(alpha = 0.4) +
+  scale_color_manual(values = colores) +
+  scale_fill_manual(values = colores) +
+  scale_x_log10() +
+  labs(title = "Escala logarítmica")
+```
+
+## Correlaciones
+
+- Estas correlaciones las obtengo con las variables en escala logarítmica.
+- Correlación no paramétrica de Spearman.
+
+```{r, message=FALSE}
+library(corrr)
+mi_train %>% 
+  select_if(is.numeric) %>% 
+  select(-new_year, -Rating) %>% 
+  mutate_if(is.numeric, log) %>% 
+  correlate(method = "spearman") %>% 
+  rearrange() %>% 
+  shave() %>% 
+  rplot(print_cor = TRUE) +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1)) 
+```
+
+## Dispersión
+
+
+```{r, warning=FALSE, message=FALSE}
+mi_train %>% 
+  mutate(Rating = as.factor(Rating)) %>% 
+  ggplot(aes(x = Reviews, y = new_installs, color = Rating)) +
+  geom_point(size = 1) +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_smooth(se = FALSE, size = 1) +
+  scale_color_manual(values = colores) +
+  labs(x = "Reseñas", y = "Descargas",
+       title = "Descargas vs Reseñas",
+       subtitle = "Escala logarítmica")
+```
+
+```{r, warning=FALSE, message=FALSE}
+mi_train %>% 
+  mutate(Rating = as.factor(Rating)) %>% 
+  ggplot(aes(x = size_kb, y = Reviews, color = Rating)) +
+  geom_point(size = 1, alpha = 0.5) +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_smooth(se = FALSE, size = 1.5) +
+  scale_color_manual(values = colores) +
+  labs(x = "Tamaño de App", y = "Reseñas",
+       title = "Reseñas vs Tamaño de App",
+       subtitle = "Escala logarítmica")
+```
+
+```{r, warning=FALSE, message=FALSE}
+mi_train %>% 
+  mutate(Rating = as.factor(Rating)) %>% 
+  ggplot(aes(x = new_version, y = Reviews, color = Rating)) +
+  geom_point(size = 1, alpha = 0.5) +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_smooth(se = FALSE, size = 1.5) +
+  scale_color_manual(values = colores) +
+  labs(x = "Reseñas", y = "Versión de App",
+       title = "Reseñas vs Versión de App",
+       subtitle = "Escala logarítmica")
+```
+
+```{r, warning=FALSE, message=FALSE}
+mi_train %>% 
+  mutate(Rating = as.factor(Rating)) %>% 
+  ggplot(aes(x = new_subversion, y = Reviews, color = Rating)) +
+  geom_point(size = 1, alpha = 0.5) +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_smooth(se = FALSE, size = 1.5) +
+  scale_color_manual(values = colores) +
+  labs(x = "Reseñas", y = "Sub-versión de App",
+       title = "Reseñas vs Versión de App",
+       subtitle = "Escala logarítmica")
+```
+
+## PCA
+
+```{r, message=FALSE, warning=FALSE}
+# "Receta" y "preparación" para PCA y UMAP
+receta_reductDim <- mi_train %>%
+  select_if(is.numeric) %>% 
+  select(-new_year) %>% 
+  recipe(~ .) %>% 
+  update_role(Rating, new_role = "id") %>% 
+  step_knnimpute(all_predictors()) %>% 
+  step_BoxCox(all_predictors()) %>%
+  step_normalize(all_predictors()) %>% 
+  step_pca(all_predictors())
+  
+pca_prep <- receta_reductDim %>% prep()
+pca_prep
+```
+
+- **Recuperando resultados de PCA:**
+
+```{r, fig.width=9, fig.height=3}
+# Cargas (loadings)
+tidy_pca <- tidy(pca_prep, 4) 
+tidy_pca %>% 
+  filter(component %in% paste0("PC", 1:5)) %>% 
+  ggplot(aes(x = value, y = terms, fill = value)) +
+  facet_wrap(~component, ncol = 5) +
+  geom_col(show.legend = FALSE)
+```
+
+- **Gráfico conn nuevas coordenadas:**
+
+```{r}
+juice(pca_prep) %>% 
+  ggplot(aes(x = PC1, y = PC2, color = as.factor(Rating))) + 
+  geom_point() +
+  geom_vline(xintercept = 0, lty = 2, lwd = 0.1) +
+  geom_hline(yintercept = 0, lty = 2, lwd = 0.1) +
+  scale_color_manual(values = colores)
+```
+
+- **Gráfico de 3 primeras componentes:**
+
+```{r, message=FALSE, warning=FALSE}
+library(plotly)
+plot_ly(x = ~ PC1, y = ~ PC2, z = ~PC3, data = juice(pca_prep),
+        color = ~as.factor(Rating)) %>% 
+  add_markers()
+```
+
+## UMAP
+
+```{r, message=FALSE, warning=FALSE}
+library(embed)
+# "Receta" y "preparación"  UMAP
+receta_umap <- mi_train %>%
+  select_if(is.numeric) %>% 
+  select(-new_year) %>% 
+  recipe(~ .) %>% 
+  update_role(Rating, new_role = "id") %>% 
+  step_knnimpute(all_predictors()) %>% 
+  step_BoxCox(all_predictors()) %>%
+  step_normalize(all_predictors()) %>% 
+  step_umap(all_predictors())
+  
+umap_prep <- receta_umap %>% prep()
+umap_prep
+```
+
+- **Gráfico con nuevas coordenadas:**
+
+```{r}
+juice(umap_prep) %>% 
+  ggplot(aes(x = umap_1, y = umap_2, color = as.factor(Rating))) + 
+  geom_point() +
+  geom_vline(xintercept = 0, lty = 2, lwd = 0.1) +
+  geom_hline(yintercept = 0, lty = 2, lwd = 0.1) +
+  scale_color_manual(values = colores)
+```
+
+
+## ¿Respuesta Imbalanceada?
+
+```{r}
+mi_train %>% 
+  mutate(Rating = as.factor(Rating)) %>% 
+  count(Rating) %>% 
+  ggplot(aes(x = Rating, y = n, fill = Rating, color = Rating,
+             label = n)) +
+  geom_col() +
+  geom_label(color = "white") +
+  scale_color_manual(values = colores) +
+  scale_fill_manual(values = colores) +
+  theme(legend.position = "none")
+```
+
+
+# Modelos 
+
+- Utilizo la meta-biblioteca [tidymodels](https://www.tidymodels.org) que contiene bibliotecas específicas para construcción de modelos de machine learning.
+- En este caso ajusto [modelos lineales generalizos con regularización](https://en.wikipedia.org/wiki/Regularized_least_squares#:~:text=Regularized%20least%20squares%20(RLS)%20is,exceeds%20the%20number%20of%20observations.) ([Regresión Ridge](https://en.wikipedia.org/wiki/Tikhonov_regularization), [Regresión Lasso](https://en.wikipedia.org/wiki/Lasso_(statistics)) y [ElasticNet](https://en.wikipedia.org/wiki/Elastic_net_regularization))
+- **Preprocesamiento e ingeniería de características:**
+  - Se prueban modelos con imputación a través del método de k-vecinos más cercanos.
+  - Las variables se estandarizan para la construcción de modelos.
+  - Pruebo modelos con y sin escala logarítmica.
+  - Pruebo modelos con y sin [transformación de Box-Cox](https://es.wikipedia.org/wiki/Transformaci%C3%B3n_Box-Cox) para normalizar las variables.
+  - Etiquetas de baja frecuencia les agrego el nivel "otro".
+
+```{r}
+library(tidymodels)
+```
+
+- La siguiente imagen (tomada de [tidymodels.org](https://www.tidymodels.org/start/case-study/)) denota la estrategia de evaluación de modelos que adopto.
+
+<center>
+<img src = "https://www.tidymodels.org/start/case-study/img/validation-split.svg" />
+</center>
+
+## Preprocesamiento {.tabset .tabset-fade .tabset-pills}
+
+- Fracciono los datos en train y test con proporciones de 80 y 20%, respectivamente. Estratifico la partición en función de la variable que indica si la app tiene algún costo.
+- Pruebo el sigueinte preprocesamiento:
+  - **Receta:** estandarización, binarización, datos con imputación por knn, transformación de Box-Cox, asignación de etiqueta "otra" a niveles de baja frecuencia y como es un problema de clasificación imbalanceado, utilizo la biblioteca [themis](https://github.com/tidymodels/themis) para generar clases balanceadas a través de muestreo con reemplazo.
+
+### Receta Train - Validación
+
+```{r}
+library(themis)
+# Train-Test
+set.seed(2020)
+data_split <- initial_split(data = mi_train, prop = 0.80, strata = Type)
+data_train <- training(data_split) %>% mutate(Rating = as.factor(Rating))
+data_test <- testing(data_split) %>% mutate(Rating = as.factor(Rating))
+
+# Receta
+receta1 <- recipe(Rating ~ ., data = data_train) %>% 
+  step_knnimpute(all_predictors(), neighbors = 5) %>%
+  step_BoxCox(all_numeric(), -all_outcomes()) %>% 
+  step_other(all_nominal(), -all_outcomes(), other = "otra") %>% 
+  step_dummy(all_nominal(), -all_outcomes(), one_hot = TRUE) %>%  
+  step_normalize(all_numeric(), -all_outcomes()) %>% 
+  step_upsample(Rating)
+
+receta1_prep <- receta1 %>% 
+  prep()
+```
+
+
+### Submission
+
+```{r}
+receta_sub <- recipe(~ ., data = mi_test) %>% 
+  step_knnimpute(all_predictors(), neighbors = 5) %>%
+  step_BoxCox(all_numeric(), -all_outcomes()) %>% 
+  step_other(all_nominal(), -all_outcomes(), other = "otra") %>% 
+  step_dummy(all_nominal(), -all_outcomes(), one_hot = TRUE) %>%  
+  step_normalize(all_numeric(), -all_outcomes())
+
+prep_sub <- prep(receta_sub)
+data_sub <- juice(prep_sub)
+```
+
+## Ajuste
+
+### Lasso Inicial
+
+```{r}
+lasso1 <- logistic_reg(penalty = 0.1, mixture = 1) %>% 
+  set_mode("classification") %>% 
+  set_engine("glmnet")
+
+wf1 <- workflow() %>% 
+  add_recipe(receta1)
+
+res_lasso1 <- wf1 %>% 
+  add_model(lasso1) %>% 
+  fit(data = data_train)
+
+res_lasso1 %>% 
+  tidy()
+```
+
+### Tuning 
+
+- Bootstrapping estratificado con 10 submuestras como estrategia para evaluar el modelo.
+- Ajuste de hiperparámetros "penalty" y "mixture".
+
+```{r}
+set.seed(2020)
+data_boost <- bootstraps(data_train, strata = Type, times = 10)
+
+tune_lasso <- logistic_reg(penalty = tune(), mixture = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("glmnet")
+
+mi_grid <- grid_regular(penalty(),
+                        mixture(),
+                        levels = 50)
+
+doParallel::registerDoParallel()
+set.seed(1992)
+lasso_grid <- tune_grid(
+  wf1 %>% add_model(tune_lasso),
+  resamples = data_boost,
+  grid = mi_grid
+)
+
+doParallel::stopImplicitCluster()
+```
+
+- **Métricas de error (total de filas: 5 mil):**
+
+```{r}
+lasso_grid  %>% 
+  collect_metrics() %>% 
+  head()
+```
+
+- **Gráfico de métricas de error:** hiperparámetros *penalty* y *mixture*.
+
+```{r}
+lasso_grid  %>% 
+  collect_metrics() %>%  
+  ggplot(aes(x = penalty, y = mean, color = .metric)) +
+  geom_line() +
+  geom_smooth(se = FALSE) +
+  facet_wrap(~.metric, scales = "free", nrow = 2) +
+  scale_x_log10() +
+  scale_color_manual(values = colores) +
+  theme(legend.position = "none")
+```
+
+```{r}
+lasso_grid  %>% 
+  collect_metrics() %>%  
+  ggplot(aes(x = mixture, y = mean, color = .metric)) +
+  geom_line() +
+  geom_smooth(se = FALSE) +
+  facet_wrap(~.metric, scales = "free", nrow = 2) +
+  scale_x_log10() +
+  scale_color_manual(values = colores) +
+  theme(legend.position = "none")
+```
+### Mejor modelo
+
+```{r}
+mejor_tuning <- lasso_grid %>% 
+  select_best(metric = "roc_auc")
+mejor_tuning
+```
+
+## Resultado Final
+
+- Flujo final con ajuste del modelo con mejores hiperparámetros.
+- Este modelo es el que se usa para predecir el rating del "test" en la competencia.
+- Obtengo la importancia de variables con la biblitoeca *vip*.
+
+### Importancia de variables
+
+```{r, fig.height=10, fig.width=9}
+library(vip)
+# Flujo final
+modelo_final <- finalize_workflow(wf1 %>% add_model(tune_lasso),
+                                  parameters = mejor_tuning)
+# Ajuste final
+modelo_final %>% 
+  fit(data_train) %>% 
+  pull_workflow_fit() %>% 
+  vi(lambda = mejor_tuning$penalty) %>% 
+  mutate(Importance = abs(Importance),
+         Variable = fct_reorder(Variable, Importance)) %>% 
+  ggplot(aes(x = Importance, y = Variable, color = Sign, fill = Sign)) +
+  geom_col(alpha = 0.7) +
+  scale_color_manual(values = colores) +
+  scale_fill_manual(values = colores) +
+  scale_x_continuous(expand = c(0, 0)) +
+  labs(title = "Importancia de variables")
+```
+
+### Modelo Final
+
+```{r}
+ajuste_final <- modelo_final %>% 
+  fit(data_train)
+ajuste_final
+```
+
+- **Estimativas (parámetros) del modelo final:**
+
+```{r}
+tidy(ajuste_final)
+```
+
+# Predicciones
+
+- La misma receta inicial se aplica sobre el conjunto de validación, añadiendo la transformación.
+
+```{r}
+test_baked  <- bake(object = receta1_prep, new_data = data_test)
+head(test_baked)
+```
+
+## Train
+
+```{r}
+predichos_train <- ajuste_final$fit$fit %>%
+  predict(new_data = juice(receta1_prep) %>% select(-Rating), type = "class") %>%
+  bind_cols(juice(receta1_prep) %>%  select(Rating)) %>% 
+  mutate_all(as.factor)
+head(predichos_train)
+```
+
+### Matriz de confusión
+
+```{r}
+predichos_train %>%
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+- **Precisión en train:**
+
+```{r}
+predichos_train %>%
+  metrics(Rating, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+- **F1-Score:**
+
+```{r}
+predichos_train%>%
+  f_meas(Rating, .pred_class) %>%
+  select(-.estimator) 
+```
+
+- **Curva ROC:**
+
+```{r}
+ajuste_final$fit$fit %>%
+  predict(new_data = juice(receta1_prep) %>% select(-Rating), type = "prob") %>%  
+  bind_cols(juice(receta1_prep) %>%  select(Rating)) %>% 
+  roc_curve(Rating, .pred_0) %>% 
+  autoplot()+
+  labs(title = "ROC - Train")
+```
+
+
+## Validación
+
+```{r}
+predichos_test <- ajuste_final$fit$fit %>%
+  predict(new_data = test_baked %>% select(-Rating), type = "class") %>%
+  bind_cols(test_baked %>% select(Rating)) %>% 
+  mutate_all(as.factor)
+head(predichos_test)
+```
+
+### Matriz de confusión
+
+```{r}
+predichos_test %>%
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+- **Precisión en test:**
+
+```{r}
+predichos_test %>%
+  metrics(Rating, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+- **F1-Score:**
+
+```{r}
+predichos_test %>%
+  f_meas(Rating, .pred_class) %>%
+  select(-.estimator) 
+```
+
+- **Curva ROC:**
+
+```{r}
+ajuste_final$fit$fit %>%
+  predict(new_data = test_baked %>% select(-Rating), type = "prob") %>%
+  bind_cols(test_baked %>% select(Rating)) %>%
+  roc_curve(Rating, .pred_0) %>% 
+  autoplot() +
+  labs(title = "ROC - Test")
+```
+
+# Submission
+
+```{r}
+#predicciones
+predichos_final1 <- ajuste_final$fit$fit %>%
+  predict(new_data = data_sub, type = "class")
+
+# Submission
+sampleSub %>% 
+  select(-rating) %>% 
+  mutate(rating = predichos_final1$.pred_class) ->
+  sub_02_glmnet
+head(sub_02_glmnet)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_02_glmnet, file = "../submission/glmnet_02.csv")
+```
+
+
+

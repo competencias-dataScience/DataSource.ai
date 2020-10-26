@@ -1,0 +1,373 @@
+---
+title: "Predicción del rating de Las aplicaciones en Google Play Store"
+subtitle: "Reto DataSource"
+author: "[Edimer (Sidereus)](https://edimer.github.io/)"
+output:
+  html_notebook:
+    toc: true
+    toc_float: 
+      smooth_scroll: false
+      collapsed: false
+    highlight: pygments
+    theme: spacelab
+    css: estilo.css
+    code_folding: hide
+---
+
+<center>
+<img src = "../img/competencia.png" />
+</center>
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.align = "center")
+```
+
+- [Sitio oficial del reto en DataSource.](https://www.datasource.ai/es/home/data-science-competitions-for-startups/prediciendo-el-rating-de-las-aplicaciones-en-google-play-store)
+
+# Variables
+
+<center>
+<img src = "../img/variables.PNG" />
+</center>
+
+# Datos
+
+```{r, warning=FALSE, message=FALSE}
+# Cargando datos
+load("../data/my_train1.Rdata")
+load("../data/my_test1.Rdata")
+sampleSub <- read_csv("../data/sample_submission.csv")
+head(new_train1)
+```
+
+- Selecciono sólo las variables que van a ingresar al análisis.
+
+```{r}
+library(tidyverse)
+
+mi_train <- new_train1 %>% 
+  select(-c(App, date_update))
+
+mi_test <- new_test1 %>% 
+  select(-c(App, date_update))
+```
+
+- Primero se garantiza que los modelos sean entrenados con las mismas variables que contiene el archivo de test (submission).
+
+```{r}
+library(fastDummies)
+# Binarización en test
+binar_train <- dummy_cols(mi_train, remove_selected_columns = TRUE)
+binar_test <- dummy_cols(mi_test, remove_selected_columns = TRUE)
+
+# Las mismas variables en train y test (submission)
+variables_iguales <- c(names(binar_train)[names(binar_train) %in% names(binar_test)],
+                       "Rating")
+
+# Datos de train finales
+binar_train <- binar_train[, variables_iguales]
+```
+
+# Modelos
+
+- En este caso voy a comparar [máquinas de soporte vectorial](https://es.wikipedia.org/wiki/M%C3%A1quinas_de_vectores_de_soporte) con [kernel polinomial](https://en.wikipedia.org/wiki/Polynomial_kernel) y [kernel radial.](https://en.wikipedia.org/wiki/Radial_basis_function_kernel)
+- Todo el proceso que subyace a la modelación es realizado a través de la bibliotaca *tidymodels* y sus componentes.
+  - Kernel polinomial con [función svm_poly()](https://parsnip.tidymodels.org/reference/svm_poly.html)
+  - Kernel de base radial con [función svm_rbf()](https://parsnip.tidymodels.org/reference/svm_rbf.html)
+- Para ambos algoritmos se ajustan los hiperparámetros respectivos.
+- **Preprocesamiento:**
+  - Fracciono los datos en train y test con proporciones de 80 y 20%, respectivamente. 
+- Pruebo el siguiente preprocesamiento:
+  - **Receta:** estandarización, binarización (previamente binarizadas), datos con imputación por knn, [transformación de Yeo–Johnson](https://en.wikipedia.org/wiki/Power_transform#Yeo%E2%80%93Johnson_transformation) y como es un problema de clasificación imbalanceado, utilizo la biblioteca [themis](https://github.com/tidymodels/themis) para generar clases balanceadas a través de muestreo con reemplazo.
+- Pasos a seguir con *tidymodels*:
+  - 1. Definir preprocesamiento
+  - 2. Definir el modelo y los hiperparámetros a optimizar
+  - 3. Definir la estrategia de validación del modelo
+  - 4. Definir tipo de *tuning* (grid de hiperparámetros)
+  - 5. Ejecución o entrenamiento de modelos
+  - 6. Evaluación de modelos (gráficos con métricas de error)
+  - 7. Ajuste del modelo final
+  - 8. Predicciones finales
+
+## Preprocesamiento {.tabset .tabset-fade .tabset-pills}
+
+### Receta principal
+
+```{r}
+# Preprocesamiento
+library(themis)
+
+# Train-Test
+set.seed(2020)
+data_split <- initial_split(data = binar_train, prop = 0.80)
+data_train <- training(data_split) %>% mutate(Rating = as.factor(Rating))
+data_test <- testing(data_split) %>% mutate(Rating = as.factor(Rating))
+
+# Receta
+receta1 <- recipe(Rating ~ ., data = data_train) %>% 
+  step_knnimpute(all_predictors(), neighbors = 2) %>%
+  step_YeoJohnson(all_numeric(), -all_outcomes()) %>% 
+  step_normalize(all_numeric(), -all_outcomes()) %>% 
+  step_upsample(Rating)
+
+receta1_prep <- receta1 %>% 
+  prep()
+```
+
+### Receta Submission
+
+```{r}
+receta_sub <- recipe(~ ., data = binar_test) %>% 
+  step_knnimpute(all_predictors(), neighbors = 2) %>%
+  step_YeoJohnson(all_numeric(), -all_outcomes()) %>% 
+  step_normalize(all_numeric(), -all_outcomes())
+
+prep_sub <- prep(receta_sub)
+data_sub <- juice(prep_sub)
+```
+
+## Entrenamiento
+
+- **Tiempo de procesamiento:** aproximadamente 6 horas.
+
+```{r}
+# Definición de modelo e ingeniería
+modelo_radial <- svm_rbf(mode = "classification",
+                         cost = tune(),
+                         rbf_sigma = tune(),
+                         margin = tune()) %>% 
+  set_engine("kernlab")
+
+# Definición de validación del modelo
+set.seed(1234)
+cv_config <- vfold_cv(data = data_train, 
+                      v = 10,
+                      strata = Rating)
+
+# Flujo de trabajo
+flujo_svmradial <- workflow() %>% 
+  add_recipe(receta1) %>% 
+  add_model(modelo_radial)
+
+# Hiperparámetros
+hiper_svmradial <- grid_random(cost(range = c(-10, 10), trans = log2_trans()),
+                               rbf_sigma(range = c(-10, 0), trans = log10_trans()),
+                               svm_margin(range = c(0, 0.5)),
+                               size = 100)
+
+# Entrenamiento paralelizado
+doParallel::registerDoParallel()
+fit_svmradial <- tune_grid(object = flujo_svmradial,
+                           resamples = cv_config,
+                           metrics = metric_set(f_meas),
+                           control = control_resamples(save_pred = TRUE),
+                           grid = hiper_svmradial)
+doParallel::stopImplicitCluster()
+```
+
+## Resultados Tuning
+
+```{r}
+fit_svmradial %>% 
+  collect_metrics() %>% 
+  arrange(desc(mean))
+```
+
+### Individuales
+
+```{r, message=FALSE, warning=FALSE, fig.height=3.5, fig.width=9}
+fit_svmradial %>% 
+  collect_metrics() %>% 
+  select(cost:margin, mean, std_err) %>% 
+  pivot_longer(cols = !c(mean, std_err), names_to = "variable",
+               values_to = "value") %>% 
+  ggplot(aes(x = value, y = mean)) +
+  facet_wrap(~variable, scales = "free") +
+  geom_point() +
+  geom_smooth(se = FALSE, size = 1, color = colores[2])
+```
+
+### Todos
+
+```{r, message=FALSE, warning=FALSE, fig.height=3.5, fig.width=9}
+fit_svmradial %>% 
+  collect_metrics() %>% 
+  ggplot(aes(x = cost, y = rbf_sigma, size = margin, color = mean)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  labs(color = "F1 Score") +
+  scale_x_log10() +
+  scale_y_log10()
+```
+
+
+## Mejor modelo
+
+```{r}
+mejor_tuning <- select_best(fit_svmradial)
+
+modelo_final <- finalize_workflow(flujo_svmradial,
+                                  parameters = mejor_tuning)
+
+doParallel::registerDoParallel()
+ajuste_final <- modelo_final %>% 
+  fit(data_train)
+doParallel::stopImplicitCluster()
+ajuste_final
+```
+
+# Predicciones
+
+## Train
+
+```{r}
+predichos_train <- ajuste_final$fit$fit %>%
+  predict(new_data = juice(receta1_prep) %>% select(-Rating), type = "class") %>%
+  bind_cols(juice(receta1_prep) %>%  select(Rating)) %>% 
+  mutate_all(as.factor)
+head(predichos_train)
+```
+
+- **Matriz de confusión:**
+
+```{r}
+predichos_train %>%
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+- **Precisión en train:**
+
+```{r}
+predichos_train %>%
+  metrics(Rating, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+- **F1 Score:**
+
+```{r}
+predichos_train%>%
+  f_meas(Rating, .pred_class) %>%
+  select(-.estimator) 
+```
+
+## Validación
+
+```{r}
+# Receta en Test
+test_baked  <- bake(object = receta1_prep, new_data = data_test)
+
+predichos_test <- ajuste_final$fit$fit %>%
+  predict(new_data = test_baked %>% select(-Rating), type = "class") %>%
+  bind_cols(test_baked %>% select(Rating)) %>% 
+  mutate_all(as.factor)
+head(predichos_test)
+```
+
+- **Matriz de confusión:**
+
+```{r}
+predichos_test %>%
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+- **Precisión en test:**
+
+```{r}
+predichos_test %>%
+  metrics(Rating, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+- **F1 Score:**
+
+```{r}
+predichos_test %>%
+  f_meas(Rating, .pred_class) %>%
+  select(-.estimator) 
+```
+
+# Submission
+
+- Para el modelo de envío ajusto nuevamente el modelo seleccionado con todos los datos.
+
+```{r}
+new_train <- bake(object = receta1_prep, new_data = binar_train)
+ultimo_ajuste <- modelo_final %>% 
+  fit(new_train)
+```
+
+- **Matriz de confusión  train completo:**
+
+```{r}
+ultimo_ajuste$fit$fit %>%
+  predict(new_data = new_train %>% select(-Rating), type = "class") %>%
+  bind_cols(new_train %>%  select(Rating)) %>% 
+  mutate_all(as.factor) %>% 
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+## Predicción final
+
+```{r}
+#predicciones
+predichos_final1 <- ultimo_ajuste$fit$fit %>%
+  predict(new_data = data_sub, type = "class")
+
+# Submission
+sampleSub %>% 
+  select(-rating) %>% 
+  mutate(rating = predichos_final1$.pred_class) ->
+  sub_03_svmR
+head(sub_03_svmR)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_03_svmR, file = "../submission/sub_03_svmR.csv")
+```
+
+# Anexos
+
+## Support Vector Machine
+
+- Las imágenes aquí presentadas han sido tomadas del blog [Support Vector Machines with the mlr package.](https://www.r-bloggers.com/2019/10/support-vector-machines-with-the-mlr-package/)
+
+## Idea intuitiva
+
+<center>
+<img src = "https://machinelearningwithmlr.files.wordpress.com/2019/10/ch06_fig_5_mlr.png?w=578" />
+</center>
+
+## Tipos de Kernel
+
+<center>
+<img src = "https://machinelearningwithmlr.files.wordpress.com/2019/10/ch06_fig_6_mlr.png?w=578" />
+</center>
+
+## Costo
+
+<center>
+<img src = "https://machinelearningwithmlr.files.wordpress.com/2019/10/ch06_fig_7_mlr.png?w=578" />
+</center>

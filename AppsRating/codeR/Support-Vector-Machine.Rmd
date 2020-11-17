@@ -331,8 +331,9 @@ ultimo_ajuste$fit$fit %>%
 
 ```{r}
 #predicciones
+binar_sub <- dummy_cols(data_sub, remove_selected_columns = TRUE)
 predichos_final1 <- ultimo_ajuste$fit$fit %>%
-  predict(new_data = data_sub, type = "class")
+  predict(new_data = binar_sub, type = "class")
 
 # Submission
 sampleSub %>% 

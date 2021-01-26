@@ -1,0 +1,769 @@
+---
+title: "Predicción del rating de Las aplicaciones en Google Play Store"
+subtitle: "Reto DataSource"
+author: "[Edimer (Sidereus)](https://edimer.github.io/)"
+output:
+  html_notebook:
+    toc: true
+    toc_float: 
+      smooth_scroll: false
+      collapsed: false
+    highlight: pygments
+    theme: spacelab
+    css: estilo.css
+    code_folding: hide
+---
+
+<center>
+<img src = "../img/competencia.png" />
+</center>
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.align = "center")
+```
+
+- [Sitio oficial del reto en DataSource.](https://www.datasource.ai/es/home/data-science-competitions-for-startups/prediciendo-el-rating-de-las-aplicaciones-en-google-play-store)
+
+# Variables
+
+<center>
+<img src = "../img/variables.PNG" />
+</center>
+
+# Datos
+
+```{r, warning=FALSE, message=FALSE}
+# Cargando datos
+library(tidyverse)
+load("../data/my_train1.Rdata")
+load("../data/my_test1.Rdata")
+sampleSub <- read_csv("../data/sample_submission.csv")
+head(new_train1)
+```
+
+- Selecciono sólo las variables que van a ingresar al análisis.
+
+```{r}
+mi_train <- new_train1 %>% 
+  select(-c(App, date_update))
+
+mi_test <- new_test1 %>% 
+  select(-c(App, date_update))
+```
+
+- Primero se garantiza que los modelos sean entrenados con las mismas variables que contiene el archivo de test (submission).
+
+```{r}
+library(fastDummies)
+# Binarización en test
+binar_train <- dummy_cols(mi_train, remove_selected_columns = TRUE)
+binar_test <- dummy_cols(mi_test, remove_selected_columns = TRUE)
+
+# Las mismas variables en train y test (submission)
+variables_iguales <- c(names(binar_train)[names(binar_train) %in% names(binar_test)],
+                       "Rating")
+
+# Datos de train finales
+binar_train <- binar_train[, variables_iguales]
+```
+
+# Modelos Árbol de Decisión 
+
+- [Ejemplo árboles de decisión con R](https://blogrpy.netlify.app/posts/treed_r/)
+- El mismo preprocesamiento que utilicé para el entrenamiento de Support Vector Machine.
+  - **Receta:** binarización (previamente binarizadas), datos con imputación por knn, [transformación de Yeo–Johnson](https://en.wikipedia.org/wiki/Power_transform#Yeo%E2%80%93Johnson_transformation) y como es un problema de clasificación imbalanceado, utilizo la biblioteca [themis](https://github.com/tidymodels/themis) para generar clases balanceadas a través de muestreo con reemplazo.
+- En este caso voy a entrenar [árboles de decisión](https://parsnip.tidymodels.org/reference/decision_tree.html) con tres algoritmos diferentes:
+  - [Algoritmo rpart](https://cran.r-project.org/web/packages/rpart/vignettes/longintro.pdf)
+  - [Algoritmo C5.0](https://topepo.github.io/C5.0/index.html)
+  - [Random Forest](https://parsnip.tidymodels.org/reference/rand_forest.html)
+- Pasos a seguir con *tidymodels*:
+  - 1. Definir preprocesamiento
+  - 2. Definir el modelo y los hiperparámetros a optimizar
+  - 3. Definir la estrategia de validación del modelo
+  - 4. Definir tipo de *tuning* (grid de hiperparámetros)
+  - 5. Ejecución o entrenamiento de modelos
+  - 6. Evaluación de modelos (gráficos con métricas de error)
+  - 7. Ajuste del modelo final
+  - 8. Predicciones finales
+
+# Preprocesamiento {.tabset .tabset-fade .tabset-pills}
+
+## Receta principal
+
+```{r}
+# Preprocesamiento
+library(themis)
+library(tidymodels)
+
+# Train-Test
+set.seed(2020)
+data_split <- initial_split(data = binar_train, prop = 0.80)
+data_train <- training(data_split) %>% mutate(Rating = as.factor(Rating))
+data_test <- testing(data_split) %>% mutate(Rating = as.factor(Rating))
+
+# Receta
+receta1 <- recipe(Rating ~ ., data = data_train) %>% 
+  step_knnimpute(all_predictors(), neighbors = 2) %>%  
+  step_YeoJohnson(all_numeric(), -all_outcomes()) %>%
+  step_upsample(Rating)
+
+receta1_prep <- receta1 %>% 
+  prep()
+```
+
+## Receta Submission
+
+```{r}
+receta_sub <- recipe(~ ., data = mi_test) %>% 
+  step_knnimpute(all_predictors(), neighbors = 2) %>%   
+  step_YeoJohnson(all_numeric(), -all_outcomes())
+
+prep_sub <- prep(receta_sub)
+data_sub <- juice(prep_sub)
+```
+
+# Algoritmo `rpart` {.tabset .tabset-fade .tabset-pills}
+
+## Entrenamiento
+
+- **Tiempo de ejecución:** aproximadamente 20 minutos.
+
+```{r}
+# Tiempo de ejecución
+library(tictoc)
+tic()
+
+# Definición de modelo e ingeniería
+modelo_rpart <- decision_tree(
+  mode = "classification",
+  cost_complexity = tune(),
+  tree_depth = tune(),
+  min_n = tune()
+  
+) %>%
+  set_engine("rpart")
+
+# Definición de validación del modelo
+set.seed(1234)
+cv_config <- vfold_cv(data = data_train, 
+                      v = 10,
+                      strata = Rating)
+
+# Flujo de trabajo
+flujo_rpart <- workflow() %>% 
+  add_recipe(receta1) %>% 
+  add_model(modelo_rpart)
+
+# Hiperparámetros
+hiper_rpart <- grid_random(cost_complexity(range = c(-5, 5), trans = log10_trans()),
+                           tree_depth(range = c(1L, 30L)),
+                           min_n(range = c(2L, 20L)),
+                           size = 100)
+
+# Entrenamiento paralelizado
+doParallel::registerDoParallel()
+fit_rpart <- tune_grid(object = flujo_rpart,
+                           resamples = cv_config,
+                           metrics = metric_set(f_meas),
+                           control = control_resamples(save_pred = TRUE),
+                           grid = hiper_rpart)
+doParallel::stopImplicitCluster()
+toc()
+```
+
+## Resultados Train
+
+```{r}
+fit_rpart %>% 
+  collect_metrics() %>% 
+  arrange(desc(mean))
+```
+
+- **Hiperparámetros individuales:**
+
+```{r}
+fit_rpart %>% 
+  collect_metrics() %>% 
+  select(cost_complexity:min_n, mean, std_err) %>% 
+  pivot_longer(cols = !c(mean, std_err), names_to = "variable",
+               values_to = "value") %>% 
+  ggplot(aes(x = value, y = mean)) +
+  facet_wrap(~variable, scales = "free") +
+  geom_point() +
+  geom_smooth(se = FALSE, size = 1, color = "red")
+```
+
+- **Todos los hiperparámetros:**
+
+```{r}
+fit_rpart %>% 
+  collect_metrics() %>% 
+  ggplot(aes(x = cost_complexity, y = tree_depth, size = min_n, color = mean)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  labs(color = "F1 Score") +
+  scale_x_log10() +
+  scale_y_log10()
+```
+
+## Modelo Final
+
+```{r}
+mejor_tuning <- select_best(fit_rpart)
+
+modelo_final <- finalize_workflow(flujo_rpart,
+                                  parameters = mejor_tuning)
+
+doParallel::registerDoParallel()
+ajuste_final <- modelo_final %>%
+  fit(data_train)
+doParallel::stopImplicitCluster()
+```
+
+## Predicciones
+
+### Train
+
+- **Train:**
+
+```{r}
+predichos_train <- ajuste_final$fit$fit %>%
+  predict(new_data = juice(receta1_prep) %>% select(-Rating), type = "class") %>%
+  bind_cols(juice(receta1_prep) %>%  select(Rating)) %>% 
+  mutate_all(as.factor)
+head(predichos_train)
+```
+
+- **Matriz de confusión train:**
+
+```{r}
+predichos_train %>%
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+- **Precisión en train:**
+
+```{r}
+predichos_train %>%
+  metrics(Rating, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+- **F1 Score train:**
+
+```{r}
+predichos_train %>%
+  f_meas(Rating, .pred_class) %>%
+  select(-.estimator) 
+```
+
+### Validación
+
+- **Validación:**
+
+```{r}
+# Receta en Test
+test_baked  <- bake(object = receta1_prep, new_data = data_test)
+
+predichos_test <- ajuste_final$fit$fit %>%
+  predict(new_data = test_baked %>% select(-Rating), type = "class") %>%
+  bind_cols(test_baked %>% select(Rating)) %>% 
+  mutate_all(as.factor)
+head(predichos_test)
+```
+
+- **Matriz de confusión test:**
+
+```{r}
+predichos_test %>%
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+- **Precisión en validación:**
+
+```{r}
+predichos_test %>%
+  metrics(Rating, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+- **F1 Score validación:**
+
+```{r}
+predichos_test %>%
+  f_meas(Rating, .pred_class) %>%
+  select(-.estimator) 
+```
+
+### Submission
+
+- **Modelo con todos los datos:**
+
+```{r}
+new_train <- bake(object = receta1_prep, new_data = binar_train)
+ultimo_ajuste <- modelo_final %>% 
+  fit(new_train)
+```
+
+- **Predicciones finales:**
+
+```{r}
+#predicciones
+binar_sub <- dummy_cols(data_sub, remove_selected_columns = TRUE)
+
+predichos_final1 <- ultimo_ajuste$fit$fit %>%
+  predict(new_data = binar_sub, type = "class")
+
+# Submission
+sampleSub %>% 
+  select(-rating) %>% 
+  mutate(rating = predichos_final1$.pred_class) ->
+  sub_04_rpart
+head(sub_04_rpart)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_04_rpart, file = "../submission/sub_04_rpart.csv")
+```
+
+
+
+# Algoritmo `C5.0` {.tabset .tabset-fade .tabset-pills}
+
+## Entrenamiento
+
+- **Tiempo de ejecución:** aproximadamente 5 minutos.
+
+```{r}
+# Tiempo de ejecución
+library(tictoc)
+tic()
+
+# Definición de modelo e ingeniería
+modelo_c5 <- decision_tree(
+  mode = "classification",
+  min_n = tune()
+  
+) %>%
+  set_engine("C5.0")
+
+# Definición de validación del modelo
+set.seed(1234)
+cv_config <- vfold_cv(data = data_train, 
+                      v = 10,
+                      strata = Rating)
+
+# Flujo de trabajo
+flujo_c5 <- workflow() %>% 
+  add_recipe(receta1) %>% 
+  add_model(modelo_c5)
+
+# Hiperparámetros
+hiper_c5 <- grid_random(min_n(range = c(2L, 20L)),
+                        size = 100)
+
+# Entrenamiento paralelizado
+doParallel::registerDoParallel()
+fit_c5 <- tune_grid(object = flujo_c5,
+                           resamples = cv_config,
+                           metrics = metric_set(f_meas),
+                           control = control_resamples(save_pred = TRUE),
+                           grid = hiper_c5)
+doParallel::stopImplicitCluster()
+toc()
+```
+
+## Resultados Train
+
+```{r}
+fit_c5 %>% 
+  collect_metrics() %>% 
+  arrange(desc(mean))
+```
+
+- **Hiperparámetros individuales:**
+
+```{r}
+fit_c5 %>% 
+  collect_metrics() %>% 
+  select(min_n, mean, std_err) %>% 
+  pivot_longer(cols = !c(mean, std_err), names_to = "variable",
+               values_to = "value") %>% 
+  ggplot(aes(x = value, y = mean)) +
+  facet_wrap(~variable, scales = "free") +
+  geom_point() +
+  geom_smooth(se = FALSE, size = 1, color = "red")
+```
+
+## Modelo Final
+
+```{r}
+mejor_tuning <- select_best(fit_c5)
+
+modelo_final <- finalize_workflow(flujo_c5,
+                                  parameters = mejor_tuning)
+
+doParallel::registerDoParallel()
+ajuste_final <- modelo_final %>%
+  fit(data_train)
+doParallel::stopImplicitCluster()
+```
+
+## Predicciones
+
+### Train
+
+- **Train:**
+
+```{r}
+predichos_train <- ajuste_final$fit$fit %>%
+  predict(new_data = juice(receta1_prep) %>% select(-Rating), type = "class") %>%
+  bind_cols(juice(receta1_prep) %>%  select(Rating)) %>% 
+  mutate_all(as.factor)
+head(predichos_train)
+```
+
+- **Matriz de confusión train:**
+
+```{r}
+predichos_train %>%
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+- **Precisión en train:**
+
+```{r}
+predichos_train %>%
+  metrics(Rating, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+- **F1 Score train:**
+
+```{r}
+predichos_train %>%
+  f_meas(Rating, .pred_class) %>%
+  select(-.estimator) 
+```
+
+### Validación
+
+- **Validación:**
+
+```{r}
+# Receta en Test
+test_baked  <- bake(object = receta1_prep, new_data = data_test)
+
+predichos_test <- ajuste_final$fit$fit %>%
+  predict(new_data = test_baked %>% select(-Rating), type = "class") %>%
+  bind_cols(test_baked %>% select(Rating)) %>% 
+  mutate_all(as.factor)
+head(predichos_test)
+```
+
+- **Matriz de confusión test:**
+
+```{r}
+predichos_test %>%
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+- **Precisión en validación:**
+
+```{r}
+predichos_test %>%
+  metrics(Rating, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+- **F1 Score validación:**
+
+```{r}
+predichos_test %>%
+  f_meas(Rating, .pred_class) %>%
+  select(-.estimator) 
+```
+
+### Submission
+
+- **Modelo con todos los datos:**
+
+```{r}
+new_train <- bake(object = receta1_prep, new_data = binar_train)
+ultimo_ajuste <- modelo_final %>% 
+  fit(new_train)
+```
+
+- **Predicciones finales:**
+
+```{r}
+#predicciones
+binar_sub <- dummy_cols(data_sub, remove_selected_columns = TRUE)
+
+predichos_final1 <- ultimo_ajuste$fit$fit %>%
+  predict(new_data = binar_sub, type = "class")
+
+# Submission
+sampleSub %>% 
+  select(-rating) %>% 
+  mutate(rating = predichos_final1$.pred_class) ->
+  sub_05_c5
+head(sub_05_c5)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_05_c5, file = "../submission/sub_05_c5.csv")
+```
+
+# Random Forest {.tabset .tabset-fade .tabset-pills}
+
+## Entrenamiento
+
+- **Tiempo de ejecución:** aproximadamente  20 horas.
+
+```{r}
+# Tiempo de ejecución
+library(tictoc)
+tic()
+
+# Definición de modelo e ingeniería
+modelo_rf <- rand_forest(
+  mode = "classification",
+  mtry = tune(),
+  trees = tune(),
+  min_n = tune()
+) %>%
+  set_engine("ranger")
+
+# Definición de validación del modelo
+set.seed(1234)
+cv_config <- vfold_cv(data = data_train,
+                      v = 10,
+                      strata = Rating)
+
+# Flujo de trabajo
+flujo_rf <- workflow() %>%
+  add_recipe(receta1) %>%
+  add_model(modelo_rf)
+
+# Hiperparámetros
+hiper_rf <-
+  grid_random(
+    mtry(range = c(1L, ncol(data_train))),
+    trees(range = c(1L, 5000L)),
+    min_n(range = c(2L, 50L)),
+    size = 100
+  )
+
+# Entrenamiento paralelizado
+doParallel::registerDoParallel()
+fit_rf <- tune_grid(
+  object = flujo_rf,
+  resamples = cv_config,
+  metrics = metric_set(f_meas),
+  control = control_resamples(save_pred = TRUE),
+  grid = hiper_rf
+)
+doParallel::stopImplicitCluster()
+toc()
+```
+
+## Resultados Train
+
+```{r}
+fit_rf %>% 
+  collect_metrics() %>% 
+  arrange(desc(mean))
+```
+
+- **Hiperparámetros individuales:**
+
+```{r}
+fit_rf %>% 
+  collect_metrics() %>% 
+  select(mtry:min_n, mean, std_err) %>% 
+  pivot_longer(cols = !c(mean, std_err), names_to = "variable",
+               values_to = "value") %>% 
+  ggplot(aes(x = value, y = mean)) +
+  facet_wrap(~variable, scales = "free") +
+  geom_point() +
+  geom_smooth(se = FALSE, size = 1, color = "red")
+```
+
+- **Todos los hiperparámetros:**
+
+```{r}
+fit_rf %>% 
+  collect_metrics() %>% 
+  ggplot(aes(x = mtry, y = min_n, size = trees, color = mean)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  labs(color = "F1 Score") +
+  scale_x_log10() +
+  scale_y_log10()
+```
+
+## Modelo Final
+
+```{r}
+mejor_tuning <- select_best(fit_rf)
+
+modelo_final <- finalize_workflow(flujo_rf,
+                                  parameters = mejor_tuning)
+
+doParallel::registerDoParallel()
+ajuste_final <- modelo_final %>%
+  fit(data_train)
+doParallel::stopImplicitCluster()
+```
+
+## Predicciones
+
+### Train
+
+- **Train:**
+
+```{r}
+predichos_train <- ajuste_final$fit$fit %>%
+  predict(new_data = juice(receta1_prep) %>% select(-Rating), type = "class") %>%
+  bind_cols(juice(receta1_prep) %>%  select(Rating)) %>% 
+  mutate_all(as.factor)
+head(predichos_train)
+```
+
+- **Matriz de confusión train:**
+
+```{r}
+predichos_train %>%
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+- **Precisión en train:**
+
+```{r}
+predichos_train %>%
+  metrics(Rating, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+- **F1 Score train:**
+
+```{r}
+predichos_train %>%
+  f_meas(Rating, .pred_class) %>%
+  select(-.estimator) 
+```
+
+### Validación
+
+- **Validación:**
+
+```{r}
+# Receta en Test
+test_baked  <- bake(object = receta1_prep, new_data = data_test)
+
+predichos_test <- ajuste_final$fit$fit %>%
+  predict(new_data = test_baked %>% select(-Rating), type = "class") %>%
+  bind_cols(test_baked %>% select(Rating)) %>% 
+  mutate_all(as.factor)
+head(predichos_test)
+```
+
+- **Matriz de confusión test:**
+
+```{r}
+predichos_test %>%
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+- **Precisión en validación:**
+
+```{r}
+predichos_test %>%
+  metrics(Rating, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+- **F1 Score validación:**
+
+```{r}
+predichos_test %>%
+  f_meas(Rating, .pred_class) %>%
+  select(-.estimator) 
+```
+
+### Submission
+
+- **Modelo con todos los datos:**
+
+```{r}
+new_train <- bake(object = receta1_prep, new_data = binar_train)
+ultimo_ajuste <- modelo_final %>% 
+  fit(new_train)
+```
+
+- **Predicciones finales:**
+
+```{r}
+#predicciones
+binar_sub <- dummy_cols(data_sub, remove_selected_columns = TRUE)
+
+predichos_final1 <- ultimo_ajuste$fit$fit %>%
+  predict(new_data = binar_sub, type = "class")
+
+# Submission
+sampleSub %>% 
+  select(-rating) %>% 
+  mutate(rating = predichos_final1$.pred_class) ->
+  sub_06_rf
+head(sub_06_rf)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_06_rf, file = "../submission/sub_06_rf.csv")
+```

@@ -1,0 +1,263 @@
+---
+title: "Predicción del rating de Las aplicaciones en Google Play Store"
+subtitle: "Reto DataSource"
+author: "[Edimer (Sidereus)](https://edimer.github.io/)"
+output:
+  html_notebook:
+    toc: true
+    toc_float: 
+      smooth_scroll: false
+      collapsed: false
+    highlight: pygments
+    theme: spacelab
+    css: estilo.css
+    code_folding: show
+---
+
+<center>
+<img src = "../img/competencia.png" />
+</center>
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.align = "center")
+```
+
+- [Sitio oficial del reto en DataSource.](https://www.datasource.ai/es/home/data-science-competitions-for-startups/prediciendo-el-rating-de-las-aplicaciones-en-google-play-store)
+
+# Variables
+
+<center>
+<img src = "../img/variables.PNG" />
+</center>
+
+# Datos Train
+
+```{r}
+library(tidyverse)
+
+load("../data/train_FE1.Rdata")
+new_train1 <- new_train1 %>% 
+  mutate(Rating = as.factor(Rating)) %>% 
+  mutate_if(is.integer, as.numeric)
+head(new_train1)
+```
+
+# Análisis Exploratorio
+
+```{r}
+theme_set(theme_minimal())
+```
+
+## Distribuciones
+
+### Numéricas
+
+```{r, fig.width=8, fig.height=10}
+new_train1 %>% 
+  select(Rating, which(sapply(., class) == "numeric")) %>% 
+  select(-new_year) %>% 
+  pivot_longer(cols = -Rating) %>% 
+  ggplot(aes(x = value, fill = Rating, color = Rating)) +
+  facet_wrap(~name, scales = "free", ncol = 3) +
+  geom_density(alpha = 0.5) +
+  scale_x_log10() +
+  theme(legend.position = "top")
+```
+
+### Categóricas
+
+- **Content_rating - Type:**
+
+```{r, fig.width=8, fig.height=5}
+new_train1 %>% 
+  select_if(is.factor) %>% 
+  select(-App) %>% 
+  pivot_longer(cols = -Rating) %>%  
+  filter(name %in% c("content_rating", "Type")) %>% 
+  ggplot(aes(x = value, fill = Rating, color = Rating)) +
+  facet_wrap(~name, scales = "free") +
+  geom_bar(position = "fill", alpha = 0.5) +
+  coord_flip() +
+  theme(legend.position = "top")
+```
+
+- **Category - new_genres:**
+
+```{r, fig.width=8, fig.height=15}
+new_train1 %>% 
+  select_if(is.factor) %>% 
+  select(-App) %>% 
+  pivot_longer(cols = -Rating) %>%  
+  filter(name %in% c("Category", "new_genres")) %>% 
+  ggplot(aes(x = value, fill = Rating, color = Rating)) +
+  facet_wrap(~name, scales = "free") +
+  geom_bar(position = "fill", alpha = 0.5) +
+  coord_flip() +
+  theme(legend.position = "top")
+```
+
+## Interacciones Dobles
+
+- Voy a explorar cómo es el comportamiento (promedio) de las variables numéricas cuando son evaluadas en los niveles de la variable respuesta *Rating* y cada una de las variables categóricas.
+- Las interacciones dobles podrían sugerir la necesidad de extraer nuevas características.
+
+### Rating-Content Rating
+
+```{r, fig.width=8, fig.height=15, message=FALSE}
+new_train1 %>% 
+  select(Rating, content_rating, which(sapply(., class) == "numeric")) %>% 
+  select(-new_year) %>% 
+  pivot_longer(cols = !c(Rating, content_rating)) %>% 
+  group_by(Rating, content_rating, name) %>% 
+  summarise(promedio = mean(value, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = content_rating, y = promedio, color = Rating, group = Rating)) +
+  facet_wrap(~name, scales = "free", ncol = 2) +
+  geom_point(size = 2) +
+  geom_line() +
+  theme(legend.position = "top")
+```
+
+### Rating-Type
+
+```{r, fig.width=8, fig.height=15, message=FALSE}
+new_train1 %>% 
+  select(Rating, Type, which(sapply(., class) == "numeric")) %>% 
+  select(-new_year) %>% 
+  pivot_longer(cols = !c(Rating, Type)) %>% 
+  group_by(Rating, Type, name) %>% 
+  summarise(promedio = mean(value, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = Type, y = promedio, color = Rating, group = Rating)) +
+  facet_wrap(~name, scales = "free", ncol = 2) +
+  geom_point(size = 2) +
+  geom_line() +
+  theme(legend.position = "top")
+```
+
+### Rating-Category
+
+```{r, fig.width=8, fig.height=40, message=FALSE}
+new_train1 %>% 
+  select(Rating, Category, which(sapply(., class) == "numeric")) %>% 
+  select(-new_year) %>% 
+  pivot_longer(cols = !c(Rating, Category)) %>% 
+  group_by(Rating, Category, name) %>% 
+  summarise(promedio = mean(value, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = Category, y = promedio, color = Rating, group = Rating)) +
+  facet_wrap(~name, scales = "free", ncol = 1) +
+  geom_point(size = 2) +
+  geom_line() +
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 35, hjust = 1))
+```
+## Correlaciones
+
+- **Variables originales:**
+
+```{r, fig.width=8}
+library(corrplot)
+new_train1 %>% 
+  select_if(is.numeric) %>%  
+  cor(method = "spearman", use = "pairwise.complete.obs") %>% 
+  corrplot(
+    type = "upper",
+    diag = FALSE,
+    method = "pie",
+    tl.srt = 35,
+    tl.col = "black"
+  )
+```
+- **Variables con logaritmos (log1p):**
+
+```{r, fig.width=8}
+library(corrplot)
+new_train1 %>% 
+  select_if(is.numeric) %>%  
+  mutate_if(is.numeric, log1p) %>% 
+  cor(method = "spearman", use = "pairwise.complete.obs") %>% 
+  corrplot(
+    type = "upper",
+    diag = FALSE,
+    method = "pie",
+    tl.srt = 35,
+    tl.col = "black"
+  )
+```
+
+## ACP
+
+```{r}
+library(tidymodels)
+# "Receta" y "preparación" para PCA y UMAP
+receta_reductDim <- new_train1 %>%
+  mutate(Rating = as.numeric(as.character(Rating))) %>% 
+  select_if(is.numeric) %>% 
+  select(-new_year) %>% 
+  recipe(~ .) %>% 
+  update_role(Rating, new_role = "id") %>% 
+  step_knnimpute(all_predictors()) %>% 
+  step_BoxCox(all_predictors()) %>%
+  step_normalize(all_predictors()) %>% 
+  step_pca(all_predictors())
+  
+pca_prep <- receta_reductDim %>% prep()
+pca_prep
+```
+
+- **Recuperando resultados de PCA:**
+
+```{r}
+# Cargas (loadings)
+tidy_pca <- tidy(pca_prep, 4) 
+tidy_pca %>% 
+  filter(component %in% paste0("PC", 1:5)) %>% 
+  ggplot(aes(x = value, y = terms, fill = value)) +
+  facet_wrap(~component, ncol = 5) +
+  geom_col(show.legend = FALSE)
+```
+
+- **CP1 vs CP2:**
+
+```{r}
+juice(pca_prep) %>% 
+  ggplot(aes(x = PC1, y = PC2, color = as.factor(Rating))) + 
+  geom_point(alpha = 0.5) +
+  geom_vline(xintercept = 0, lty = 2, lwd = 0.1) +
+  geom_hline(yintercept = 0, lty = 2, lwd = 0.1)
+```
+
+## UMAP
+
+```{r}
+library(embed)
+# "Receta" y "preparación"  UMAP
+receta_umap <- new_train1 %>%
+  mutate(Rating = as.numeric(as.character(Rating))) %>% 
+  select_if(is.numeric) %>% 
+  select(-new_year) %>% 
+  recipe(~ .) %>% 
+  update_role(Rating, new_role = "id") %>% 
+  step_knnimpute(all_predictors()) %>% 
+  step_BoxCox(all_predictors()) %>%
+  step_normalize(all_predictors()) %>% 
+  step_umap(all_predictors())
+  
+umap_prep <- receta_umap %>% prep()
+umap_prep
+```
+
+- **Gráfico con nuevas coordenadas:**
+
+```{r}
+juice(umap_prep) %>% 
+  ggplot(aes(x = umap_1, y = umap_2, color = as.factor(Rating))) + 
+  geom_point(alpha = 0.5) +
+  geom_vline(xintercept = 0, lty = 2, lwd = 0.1) +
+  geom_hline(yintercept = 0, lty = 2, lwd = 0.1)
+```
+

@@ -1,0 +1,237 @@
+---
+title: "Predicción del rating de Las aplicaciones en Google Play Store"
+subtitle: "Reto DataSource"
+author: "[Edimer (Sidereus)](https://edimer.github.io/)"
+output:
+  html_notebook:
+    toc: true
+    toc_float: 
+      smooth_scroll: false
+      collapsed: false
+    highlight: pygments
+    theme: spacelab
+    css: estilo.css
+    code_folding: show
+---
+
+<center>
+<img src = "../img/competencia.png" />
+</center>
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.align = "center")
+```
+
+- [Sitio oficial del reto en DataSource.](https://www.datasource.ai/es/home/data-science-competitions-for-startups/prediciendo-el-rating-de-las-aplicaciones-en-google-play-store)
+
+# Metodología
+
+- Las siguientes imágenes fueron tomadas del libro [Tidy Modeling with R](https://xgboost.readthedocs.io/en/latest/parameter.html) de [Max Kuhn](https://github.com/topepo) y [Julia Silge.](https://github.com/juliasilge)
+
+## Marco General
+
+<center>
+<img src = "https://www.tmwr.org/premade/data-science-model.svg" height = 450/>
+</center>
+
+## Estrategia de Validación
+
+- La siguiente imagen fue tomada de [tidymodels.org](https://www.tidymodels.org/start/case-study/) e ilustra la estrategia de evaluación de modelos que adopté.
+
+<center>
+<img src = "https://www.tidymodels.org/start/case-study/img/validation-split.svg" height = 450/>
+</center>
+
+## Fases del Modelado
+
+<center>
+<img src = "https://www.tmwr.org/premade/modeling-process.svg" height = 450/>
+</center>
+
+## Libros
+
+### *Tidy Modeling with R*
+
+<center>
+<img src = "../img/libro.PNG" height = 450/>
+</center>
+
+### *Applied Predictive Modeling*
+
+- Consultar el libro [aquí.](http://appliedpredictivemodeling.com/)
+
+<center>
+<img src = "http://static1.squarespace.com/static/51156277e4b0b8b2ffe11c00/t/51157487e4b0b8b2ffe16829/1588028705660/?format=1500w" height = 450/>
+</center>
+
+### *Feature Engineering and Selection A Practical Approach for Predictive Models*
+
+- Consultar libro [aquí.](http://www.feat.engineering/)
+
+<center>
+<img src = "https://images.routledge.com/common/jackets/amazon/978113807/9781138079229.jpg" height = 450/>
+</center>
+
+# Variables
+
+<center>
+<img src = "../img/variables.PNG" />
+</center>
+
+# Ensamble XGBoost
+
+- En este primero ensamble voy a utilizar los tres modelos ajustados con el algoritmo XGBoost.
+
+```{r}
+xgboost1 <- read_csv("../submission/sub_07_xgboost.csv") %>% 
+  rename(rating1 = rating)
+xgboost2 <- read_csv("../submission/sub_08_xgboost.csv") %>% 
+  rename(rating2 = rating)
+xgboost3 <- read_csv("../submission/sub_09_xgboost.csv") %>% 
+  rename(rating3 = rating)
+```
+
+- **Unión de las tres predicciones:**
+
+```{r}
+data_xgboost <- inner_join(xgboost1, xgboost2, by = "id") %>% 
+  inner_join(xgboost3, by = "id")
+head(data_xgboost)
+```
+
+- **Comprobando si las predicciones son iguales:**
+
+```{r}
+table(data_xgboost$rating1, data_xgboost$rating2)
+```
+
+```{r}
+table(data_xgboost$rating1, data_xgboost$rating3)
+```
+
+```{r}
+table(data_xgboost$rating2, data_xgboost$rating3)
+```
+
+- **Verificando cuáles predicciones fueron iguales en los tres modelos:**
+  - Las sumas que den tres en la variable "bandera" son coincidencias en los tres modelos para la etiqueta "1".
+  - Las sumas que den cero en la variable "bandera" son coincidencias en los tres modelos para la etiqueta "0".  
+  - Las sumas que den dos en la variable "bandera" son coincidencias en dos de los modelos para la etiqueta "1".
+  - Obtengo el promedio por fila. Aquellos promedios iguales a 0.6666667 les asigno la etiqueta "1" y aquellos con promedio igual a 0.3333333 les asigno la etiqueta "0". Esto lo hago asumiendo que la mayoría tienen "la razón". Si no está en ninguna de estas opciones mantengo la predicción del modelo 3, que fue el de mayor puntaje en la competencia.
+
+
+```{r}
+data_xgboost %>% 
+  mutate(bandera = rating1 + rating2 + rating3,
+         promedio = bandera / 3,
+         promedio = as.character(promedio),
+         rating = if_else(promedio == "0.333333333333333", true = 0,
+                          false = if_else(
+                            promedio == "0.666666666666667", true = 1,
+                            false = rating3
+                          ))) %>% 
+  select(id, rating) ->
+  sub_10_ensamble_xgboost
+head(sub_10_ensamble_xgboost)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_10_ensamble_xgboost, file = "../submission/sub_10_ensamble_xgboost.csv")
+```
+
+- **Conclusión:** este ensamble no resultó positivo en el tablero de la competencia. A partir de este resultado puedo inferir que las predicciones hechas por los dos primeros modelos XGBoost son incorrectas, ya que aún siendo mayoría están equivocadas.
+
+# Ensamble Todos
+
+```{r}
+subm1 <- read_csv("../submission/knn_01.csv") %>% 
+  rename(knn = rating)
+
+subm2 <- read_csv("../submission/glmnet_02.csv") %>% 
+  rename(glmnet = rating)
+
+subm3 <- read_csv("../submission/sub_03_svmR.csv") %>% 
+  rename(svmR = rating)
+
+subm4 <- read_csv("../submission/sub_04_rpart.csv") %>% 
+  rename(rpart = rating)
+
+subm5 <- read_csv("../submission/sub_05_c5.csv") %>% 
+  rename(c5 = rating)
+
+subm6 <- read_csv("../submission/sub_06_rf.csv") %>% 
+  rename(rf = rating)
+
+subm7 <- read_csv("../submission/sub_07_xgboost.csv") %>% 
+  rename(xgb1 = rating)
+
+subm8 <- read_csv("../submission/sub_08_xgboost.csv") %>% 
+  rename(xgb2 = rating)
+
+subm9 <- read_csv("../submission/sub_09_xgboost.csv") %>% 
+  rename(xgb3 = rating)
+```
+
+- **Data con predicciones de todos los modelos:**
+
+```{r}
+subm_completa <- inner_join(subm1, subm2, by = "id") %>% 
+  inner_join(subm3, by = "id") %>% 
+  inner_join(subm4, by = "id") %>% 
+  inner_join(subm5, by = "id") %>% 
+  inner_join(subm6, by = "id") %>% 
+  inner_join(subm7, by = "id") %>% 
+  inner_join(subm8, by = "id") %>% 
+  inner_join(subm9, by = "id")
+head(subm_completa)
+```
+
+## Pruebas $\chi^2$
+
+- Las pruebas chi-cuadrada las utilizo para evidenciar diferencias estadísticas entre los algoritmos Random Forest, Support Vector Machine y XGBoost (número 3).
+
+```{r}
+rf_xgb3 <- table(subm_completa$rf, subm_completa$xgb3)
+chisq.test(rf_xgb3, simulate.p.value = TRUE, B = 5000)
+```
+
+```{r}
+svm_xgb3 <- table(subm_completa$svmR, subm_completa$xgb3)
+chisq.test(svm_xgb3, simulate.p.value = TRUE, B = 5000)
+```
+
+```{r}
+svm_rf <- table(subm_completa$svmR, subm_completa$rf)
+chisq.test(svm_rf, simulate.p.value = TRUE, B = 5000)
+```
+
+- **Ensamble sólo con Random Forest, Support Vector Machine y XGBoost:**
+
+```{r}
+subm_completa %>% 
+  select(id, svmR, rf, xgb3) %>% 
+  mutate(bandera = svmR + rf + xgb3,
+         promedio = bandera / 3,
+         promedio = as.character(promedio),
+         rating = if_else(promedio == "0.333333333333333", true = 0,
+                          false = if_else(
+                            promedio == "0.666666666666667", true = 1,
+                            false = xgb3
+                          ))) %>% 
+  select(id, rating) ->
+  sub_11_ensamble_svmRRFXGB
+head(sub_11_ensamble_svmRRFXGB)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_11_ensamble_svmRRFXGB, file = "../submission/sub_11_ensamble_svmRRFXGB.csv")
+```
+
+

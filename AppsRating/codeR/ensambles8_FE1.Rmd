@@ -1,0 +1,603 @@
+---
+title: "Predicción del rating de Las aplicaciones en Google Play Store"
+subtitle: "Reto DataSource"
+author: "[Edimer (Sidereus)](https://edimer.github.io/)"
+output:
+  html_notebook:
+    toc: true
+    toc_float: 
+      smooth_scroll: false
+      collapsed: false
+    highlight: pygments
+    theme: spacelab
+    css: estilo.css
+    code_folding: show
+---
+
+<center>
+<img src = "../img/competencia.png" />
+</center>
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.align = "center")
+```
+
+- [Sitio oficial del reto en DataSource.](https://www.datasource.ai/es/home/data-science-competitions-for-startups/prediciendo-el-rating-de-las-aplicaciones-en-google-play-store)
+
+# Metodología
+
+- Las siguientes imágenes fueron tomadas del libro [Tidy Modeling with R](https://xgboost.readthedocs.io/en/latest/parameter.html) de [Max Kuhn](https://github.com/topepo) y [Julia Silge.](https://github.com/juliasilge)
+
+## Marco General
+
+<center>
+<img src = "https://www.tmwr.org/premade/data-science-model.svg" height = 450/>
+</center>
+
+## Estrategia de Validación
+
+- La siguiente imagen fue tomada de [tidymodels.org](https://www.tidymodels.org/start/case-study/) e ilustra la estrategia de evaluación de modelos que adopté.
+
+<center>
+<img src = "https://www.tmwr.org/premade/resampling.svg" height = 450/>
+</center>
+
+## Fases del Modelado
+
+<center>
+<img src = "https://www.tmwr.org/premade/modeling-process.svg" height = 450/>
+</center>
+
+## Libros
+
+### *Tidy Modeling with R*
+
+- Consultar libro [aquí](https://www.tmwr.org/)
+
+<center>
+<img src = "../img/libro.PNG" height = 450/>
+</center>
+
+### *Applied Predictive Modeling*
+
+- Consultar el libro [aquí.](http://appliedpredictivemodeling.com/)
+
+<center>
+<img src = "http://static1.squarespace.com/static/51156277e4b0b8b2ffe11c00/t/51157487e4b0b8b2ffe16829/1588028705660/?format=1500w" height = 450/>
+</center>
+
+### *Feature Engineering and Selection A Practical Approach for Predictive Models*
+
+- Consultar libro [aquí.](http://www.feat.engineering/)
+
+<center>
+<img src = "https://images.routledge.com/common/jackets/amazon/978113807/9781138079229.jpg" height = 450/>
+</center>
+
+# Variables
+
+<center>
+<img src = "../img/variables.PNG" />
+</center>
+
+# Ensamble LightGBM-FE1, Catboost-FE1 y MLP-FE1
+
+- Estos son los tres mejores modelos en el tablero de la competencia.
+- **Ensamble:** el resultado de la "bandera" se interpreta de la siguiente manera:
+  - Las sumas que den tres en la variable "bandera" son coincidencias en los tres modelos para la etiqueta "1".
+  - Las sumas que den cero en la variable "bandera" son coincidencias en los tres modelos para la etiqueta "0".
+  - Las sumas que den dos en la variable "bandera" son coincidencias en dos de los modelos para la etiqueta "1".
+  - Obtengo el promedio por fila. Aquellos promedios iguales a 0.6666667 les asigno la etiqueta "1" y aquellos con promedio igual a 0.3333333 les asigno la etiqueta "0". Esto lo hago asumiendo que la mayoría tienen "la razón". Si no está en ninguna de estas opciones mantengo la predicción de MLP-FE1 (Sub114).
+
+```{r}
+library(tidyverse)
+subm103 <- read_csv("../submission/sub_103_lgbm_roc_fe1.csv") %>% 
+  rename(lgbm = rating)
+
+subm114 <- read_csv("../submission/sub_114_catb_roc_fe1.csv") %>% 
+  rename(catboost = rating) 
+
+subm123 <- read_csv("../submission/sub_123_mlp_fe1.csv") %>% 
+  rename(mlp = rating)  
+```
+
+- **Data con predicciones de todos los modelos:**
+
+```{r}
+subm_completa <- inner_join(subm103, subm114, by = "id") %>% 
+  inner_join(subm123, by = "id")
+head(subm_completa)
+```
+
+- **Ensamble (*hard*):**
+
+```{r}
+subm_completa %>% 
+  mutate(bandera = lgbm + catboost + mlp,
+         promedio = bandera / 3,
+         promedio = as.character(promedio),
+         rating = if_else(promedio == "0.333333333333333", true = 0,
+                          false = if_else(
+                            promedio == "0.666666666666667", true = 1,
+                            false = mlp
+                          ))) %>% 
+  select(id, rating) ->
+  sub_126_ensamble_lgbm_catboost_mlp_fe1
+head(sub_126_ensamble_lgbm_catboost_mlp_fe1)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_126_ensamble_lgbm_catboost_mlp_fe1,
+          file = "../submission/sub_126_ensamble_lgbm_catboost_mlp_fe1.csv")
+```
+
+- El mismo ensamble anterior pero manteniendo la predicción de Catboost:
+
+```{r}
+subm_completa %>% 
+  mutate(bandera = lgbm + catboost + mlp,
+         promedio = bandera / 3,
+         promedio = as.character(promedio),
+         rating = if_else(promedio == "0.333333333333333", true = 0,
+                          false = if_else(
+                            promedio == "0.666666666666667", true = 1,
+                            false = catboost
+                          ))) %>% 
+  select(id, rating) ->
+  sub_127_ensamble_lgbm_catboost_mlp_fe1
+head(sub_127_ensamble_lgbm_catboost_mlp_fe1)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_127_ensamble_lgbm_catboost_mlp_fe1,
+          file = "../submission/sub_127_ensamble_lgbm_catboost_mlp_fe1.csv")
+```
+
+- El mismo ensamble anterior pero manteniendo la predicción de LightGBM:
+
+```{r}
+subm_completa %>% 
+  mutate(bandera = lgbm + catboost + mlp,
+         promedio = bandera / 3,
+         promedio = as.character(promedio),
+         rating = if_else(promedio == "0.333333333333333", true = 0,
+                          false = if_else(
+                            promedio == "0.666666666666667", true = 1,
+                            false = lgbm
+                          ))) %>% 
+  select(id, rating) ->
+  sub_128_ensamble_lgbm_catboost_mlp_fe1
+head(sub_128_ensamble_lgbm_catboost_mlp_fe1)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_128_ensamble_lgbm_catboost_mlp_fe1,
+          file = "../submission/sub_128_ensamble_lgbm_catboost_mlp_fe1.csv")
+```
+
+
+# Ensamble XGBoost-F1, LightGBM-FE1, Catboost-FE1 y MLP-FE1
+
+```{r}
+library(tidyverse)
+subm98 <- read_csv("../submission/sub_98_xgb_fe1.csv") %>% 
+  rename(xgb = rating)
+
+subm103 <- read_csv("../submission/sub_103_lgbm_roc_fe1.csv") %>% 
+  rename(lgbm = rating)
+
+subm114 <- read_csv("../submission/sub_114_catb_roc_fe1.csv") %>% 
+  rename(catboost = rating) 
+
+subm123 <- read_csv("../submission/sub_123_mlp_fe1.csv") %>% 
+  rename(mlp = rating)  
+```
+
+- **Data con predicciones de todos los modelos:**
+
+```{r}
+subm_completa <- inner_join(subm98, subm103, by = "id") %>% 
+  inner_join(subm114, by = "id") %>% 
+  inner_join(subm123, by = "id")
+head(subm_completa)
+```
+
+- **Ensamble:** el resultado de la "bandera" se interpreta de la siguiente manera:
+  - Las sumas que den tres en la variable "bandera" son coincidencias en los tres modelos para la etiqueta "1".
+  - Las sumas que den cero en la variable "bandera" son coincidencias en los tres modelos para la etiqueta "0".
+  - Las sumas que den dos en la variable "bandera" son coincidencias en dos de los modelos para la etiqueta "1".
+  - Obtengo el promedio por fila. Aquellos promedios iguales a 0.6666667 les asigno la etiqueta "1" y aquellos con promedio igual a 0.3333333 les asigno la etiqueta "0". Esto lo hago asumiendo que la mayoría tienen "la razón". Si no está en ninguna de estas opciones mantengo la predicción del modelo de mayor puntaje en el tablero de la competencia, que en este caso es Catboost-FE1.  
+
+```{r}
+subm_completa %>% 
+  mutate(bandera = xgb + lgbm + catboost + mlp,
+         promedio = bandera / 4,
+         promedio = as.character(promedio),
+         rating = if_else(promedio == "1", true = 1,
+                          false = if_else(
+                            promedio == "0", true = 0,
+                            false = if_else(
+                              promedio == "0.75", true = 1,
+                              false = if_else(
+                                promedio == "0.25", true = 0,
+                                false = catboost
+                              )
+                            )
+                          ))) %>% 
+  select(id, rating) ->
+  sub_129_ensamble_xgb_lgbm_catboost_mlp_fe1
+head(sub_129_ensamble_xgb_lgbm_catboost_mlp_fe1)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_129_ensamble_xgb_lgbm_catboost_mlp_fe1,
+          file = "../submission/sub_129_ensamble_xgb_lgbm_catboost_mlp_fe1.csv")
+```
+
+- El mismo ensamble pero manteniendo la predicción de LightGBM:
+
+```{r}
+subm_completa %>% 
+  mutate(bandera = xgb + lgbm + catboost + mlp,
+         promedio = bandera / 4,
+         promedio = as.character(promedio),
+         rating = if_else(promedio == "1", true = 1,
+                          false = if_else(
+                            promedio == "0", true = 0,
+                            false = if_else(
+                              promedio == "0.75", true = 1,
+                              false = if_else(
+                                promedio == "0.25", true = 0,
+                                false = lgbm
+                              )
+                            )
+                          ))) %>% 
+  select(id, rating) ->
+  sub_130_ensamble_xgb_lgbm_catboost_mlp_fe1
+head(sub_130_ensamble_xgb_lgbm_catboost_mlp_fe1)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_130_ensamble_xgb_lgbm_catboost_mlp_fe1,
+          file = "../submission/sub_130_ensamble_xgb_lgbm_catboost_mlp_fe1.csv")
+```
+
+- El mismo ensamble pero manteniendo la predicción de MLP:
+
+```{r}
+subm_completa %>% 
+  mutate(bandera = xgb + lgbm + catboost + mlp,
+         promedio = bandera / 4,
+         promedio = as.character(promedio),
+         rating = if_else(promedio == "1", true = 1,
+                          false = if_else(
+                            promedio == "0", true = 0,
+                            false = if_else(
+                              promedio == "0.75", true = 1,
+                              false = if_else(
+                                promedio == "0.25", true = 0,
+                                false = mlp
+                              )
+                            )
+                          ))) %>% 
+  select(id, rating) ->
+  sub_131_ensamble_xgb_lgbm_catboost_mlp_fe1
+head(sub_131_ensamble_xgb_lgbm_catboost_mlp_fe1)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_131_ensamble_xgb_lgbm_catboost_mlp_fe1,
+          file = "../submission/sub_131_ensamble_xgb_lgbm_catboost_mlp_fe1.csv")
+```
+
+- El mismo ensamble pero manteniendo la predicción de XGBoost:
+
+```{r}
+subm_completa %>% 
+  mutate(bandera = xgb + lgbm + catboost + mlp,
+         promedio = bandera / 4,
+         promedio = as.character(promedio),
+         rating = if_else(promedio == "1", true = 1,
+                          false = if_else(
+                            promedio == "0", true = 0,
+                            false = if_else(
+                              promedio == "0.75", true = 1,
+                              false = if_else(
+                                promedio == "0.25", true = 0,
+                                false = xgb
+                              )
+                            )
+                          ))) %>% 
+  select(id, rating) ->
+  sub_132_ensamble_xgb_lgbm_catboost_mlp_fe1
+head(sub_132_ensamble_xgb_lgbm_catboost_mlp_fe1)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_132_ensamble_xgb_lgbm_catboost_mlp_fe1,
+          file = "../submission/sub_132_ensamble_xgb_lgbm_catboost_mlp_fe1.csv")
+```
+
+# Ensamble SVM-F1, LightGBM-FE1, Catboost-FE1 y MLP-FE1
+
+```{r}
+library(tidyverse)
+subm94 <- read_csv("../submission/sub_94_svm_fe1.csv") %>% 
+  rename(svm = rating)
+
+subm103 <- read_csv("../submission/sub_103_lgbm_roc_fe1.csv") %>% 
+  rename(lgbm = rating)
+
+subm114 <- read_csv("../submission/sub_114_catb_roc_fe1.csv") %>% 
+  rename(catboost = rating) 
+
+subm123 <- read_csv("../submission/sub_123_mlp_fe1.csv") %>% 
+  rename(mlp = rating)  
+```
+
+- **Data con predicciones de todos los modelos:**
+
+```{r}
+subm_completa <- inner_join(subm94, subm103, by = "id") %>% 
+  inner_join(subm114, by = "id") %>% 
+  inner_join(subm123, by = "id")
+head(subm_completa)
+```
+
+- **Ensamble:** el resultado de la "bandera" se interpreta de la siguiente manera:
+  - Las sumas que den tres en la variable "bandera" son coincidencias en los tres modelos para la etiqueta "1".
+  - Las sumas que den cero en la variable "bandera" son coincidencias en los tres modelos para la etiqueta "0".
+  - Las sumas que den dos en la variable "bandera" son coincidencias en dos de los modelos para la etiqueta "1".
+  - Obtengo el promedio por fila. Aquellos promedios iguales a 0.6666667 les asigno la etiqueta "1" y aquellos con promedio igual a 0.3333333 les asigno la etiqueta "0". Esto lo hago asumiendo que la mayoría tienen "la razón". Si no está en ninguna de estas opciones mantengo la predicción del modelo de mayor puntaje en el tablero de la competencia, que en este caso es Catboost-FE1.  
+
+```{r}
+subm_completa %>% 
+  mutate(bandera = svm + lgbm + catboost + mlp,
+         promedio = bandera / 4,
+         promedio = as.character(promedio),
+         rating = if_else(promedio == "1", true = 1,
+                          false = if_else(
+                            promedio == "0", true = 0,
+                            false = if_else(
+                              promedio == "0.75", true = 1,
+                              false = if_else(
+                                promedio == "0.25", true = 0,
+                                false = catboost
+                              )
+                            )
+                          ))) %>% 
+  select(id, rating) ->
+  sub_133_ensamble_svm_lgbm_catboost_mlp_fe1
+head(sub_133_ensamble_svm_lgbm_catboost_mlp_fe1)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_133_ensamble_svm_lgbm_catboost_mlp_fe1,
+          file = "../submission/sub_133_ensamble_svm_lgbm_catboost_mlp_fe1.csv")
+```
+
+# Ensamble Probabilidades
+
+- Todos estos resultados se obtuvieron luego de aplicar ingeniería de características.
+
+## Red Neuronal + LightGBM-ROC + Catboost-ROC
+
+```{r}
+probs_mlp <- read_csv("../probabilitys/prob_mlp_fe1.csv") %>% 
+  rename(pred0_mlp = .pred_0,
+         pred1_mlp = .pred_1)
+
+probs_lgbm_roc <- read_csv("../probabilitys/prob_lgbm_roc_fe1.csv") %>% 
+  rename(pred0_lgbm_roc = .pred_0,
+         pred1_lgbm_roc = .pred_1)
+
+probs_catb_roc <- read_csv("../probabilitys/prob_catb_roc_fe1.csv") %>% 
+  rename(pred0_catb_roc = .pred_0,
+         pred1_catb_roc = .pred_1)
+
+```
+
+- Unión en una sola base de datos:
+  
+```{r}
+probs_juntas <- bind_cols(probs_mlp, probs_lgbm_roc, probs_catb_roc)
+head(probs_juntas)
+```
+
+- Promediando predicciones:
+  
+```{r}
+promedio_probs <- probs_juntas %>% 
+  mutate(promedio_1 = (pred1_mlp + pred1_lgbm_roc + pred1_catb_roc) / 3,
+         promedio_0 = (pred0_mlp + pred0_lgbm_roc + pred0_catb_roc) / 3)
+promedio_probs %>% 
+  select(promedio_0, promedio_1) %>% 
+  pivot_longer(cols = everything()) %>% 
+  ggplot(aes(x = value, fill = name, color = name)) +
+  geom_density(alpha = 0.5)
+```
+
+- Clasificando predicciones con punto de corte = 0.5:
+  
+```{r}
+# Sample submission con "id"
+sample_subm <- read_csv("../data/sample_submission.csv")
+```
+
+```{r}
+promedio_probs %>% 
+  mutate(id = sample_subm$id,
+         rating = if_else(promedio_1 > 0.5, true = "1", false = "0")) %>% 
+  select(id, rating) ->
+  sub134_emsamble_probs_mlp_lgbmroc_catbroc_fe1
+head(sub134_emsamble_probs_mlp_lgbmroc_catbroc_fe1)
+```
+
+- **Exportando predicciones:**
+  
+```{r}
+write_csv(sub134_emsamble_probs_mlp_lgbmroc_catbroc_fe1,
+          file = "../submission/sub134_emsamble_probs_mlp_lgbmroc_catbroc_fe1.csv")
+```
+
+- Clasificando predicciones con punto de corte = 0.45:
+  
+```{r}
+promedio_probs %>% 
+  mutate(id = sample_subm$id,
+         rating = if_else(promedio_1 > 0.45, true = "1", false = "0")) %>% 
+  select(id, rating) ->
+  sub135_emsamble_probs_mlp_lgbmroc_catbroc_fe1
+head(sub135_emsamble_probs_mlp_lgbmroc_catbroc_fe1)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub135_emsamble_probs_mlp_lgbmroc_catbroc_fe1,
+          file = "../submission/sub135_emsamble_probs_mlp_lgbmroc_catbroc_fe1.csv")
+```
+
+- Clasificando predicciones con punto de corte = 0.40:
+  
+```{r}
+promedio_probs %>% 
+  mutate(id = sample_subm$id,
+         rating = if_else(promedio_1 > 0.40, true = "1", false = "0")) %>% 
+  select(id, rating) ->
+  sub136_emsamble_probs_mlp_lgbmroc_catbroc_fe1
+head(sub136_emsamble_probs_mlp_lgbmroc_catbroc_fe1)
+```
+
+- **Exportando predicciones:**
+  
+```{r}
+write_csv(sub136_emsamble_probs_mlp_lgbmroc_catbroc_fe1,
+          file = "../submission/sub136_emsamble_probs_mlp_lgbmroc_catbroc_fe1.csv")
+```
+
+## SVM + XGBoost + Red Neuronal + LightGBM-ROC + Catboost-ROC
+
+```{r}
+probs_svm <- read_csv("../probabilitys/prob_svm_fe1.csv") %>% 
+  rename(pred0_svm = .pred_0,
+         pred1_svm = .pred_1)
+
+probs_xgb <- read_csv("../probabilitys/prob_xgb_fe1.csv") %>% 
+  rename(pred0_xgb = .pred_0,
+         pred1_xgb = .pred_1)
+
+probs_mlp <- read_csv("../probabilitys/prob_mlp_fe1.csv") %>% 
+  rename(pred0_mlp = .pred_0,
+         pred1_mlp = .pred_1)
+
+probs_lgbm_roc <- read_csv("../probabilitys/prob_lgbm_roc_fe1.csv") %>% 
+  rename(pred0_lgbm_roc = .pred_0,
+         pred1_lgbm_roc = .pred_1)
+
+probs_catb_roc <- read_csv("../probabilitys/prob_catb_roc_fe1.csv") %>% 
+  rename(pred0_catb_roc = .pred_0,
+         pred1_catb_roc = .pred_1)
+
+```
+
+- Unión en una sola base de datos:
+  
+```{r}
+probs_juntas <- bind_cols(probs_svm, probs_xgb, probs_mlp, probs_lgbm_roc,
+                          probs_catb_roc)
+head(probs_juntas)
+```
+
+- Promediando predicciones:
+  
+```{r}
+promedio_probs <- probs_juntas %>% 
+  mutate(promedio_1 = (pred1_mlp + pred1_lgbm_roc + pred1_catb_roc
+                       + pred1_svm + pred1_xgb) / 5,
+         promedio_0 = (pred0_mlp + pred0_lgbm_roc + pred0_catb_roc
+                       + pred0_svm + pred0_xgb) / 5)
+promedio_probs %>% 
+  select(promedio_0, promedio_1) %>% 
+  pivot_longer(cols = everything()) %>% 
+  ggplot(aes(x = value, fill = name, color = name)) +
+  geom_density(alpha = 0.5)
+```
+
+- Clasificando predicciones con punto de corte = 0.5:
+  
+```{r}
+# Sample submission con "id"
+sample_subm <- read_csv("../data/sample_submission.csv")
+```
+
+```{r}
+promedio_probs %>% 
+  mutate(id = sample_subm$id,
+         rating = if_else(promedio_1 > 0.5, true = "1", false = "0")) %>% 
+  select(id, rating) ->
+  sub137_emsamble_probs_svm_xgm_mlp_lgbmroc_catbroc_fe1
+head(sub137_emsamble_probs_svm_xgm_mlp_lgbmroc_catbroc_fe1)
+```
+
+- **Exportando predicciones:**
+  
+```{r}
+write_csv(sub137_emsamble_probs_svm_xgm_mlp_lgbmroc_catbroc_fe1,
+          file = "../submission/sub137_emsamble_probs_svm_xgm_mlp_lgbmroc_catbroc_fe1.csv")
+```
+
+- Clasificando predicciones con punto de corte = 0.45:
+  
+```{r}
+promedio_probs %>% 
+  mutate(id = sample_subm$id,
+         rating = if_else(promedio_1 > 0.45, true = "1", false = "0")) %>% 
+  select(id, rating) ->
+  sub138_emsamble_probs_svm_xgm_mlp_lgbmroc_catbroc_fe1
+head(sub138_emsamble_probs_svm_xgm_mlp_lgbmroc_catbroc_fe1)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub138_emsamble_probs_svm_xgm_mlp_lgbmroc_catbroc_fe1,
+          file = "../submission/sub138_emsamble_probs_svm_xgm_mlp_lgbmroc_catbroc_fe1.csv")
+```
+
+- Clasificando predicciones con punto de corte = 0.40:
+  
+```{r}
+promedio_probs %>% 
+  mutate(id = sample_subm$id,
+         rating = if_else(promedio_1 > 0.40, true = "1", false = "0")) %>% 
+  select(id, rating) ->
+  sub139_emsamble_probs_svm_xgm_mlp_lgbmroc_catbroc_fe1
+head(sub139_emsamble_probs_svm_xgm_mlp_lgbmroc_catbroc_fe1)
+```
+
+- **Exportando predicciones:**
+  
+```{r}
+write_csv(sub139_emsamble_probs_svm_xgm_mlp_lgbmroc_catbroc_fe1,
+          file = "../submission/sub139_emsamble_probs_svm_xgm_mlp_lgbmroc_catbroc_fe1.csv")
+```

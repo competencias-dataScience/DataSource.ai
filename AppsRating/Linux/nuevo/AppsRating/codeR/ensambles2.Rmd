@@ -1,0 +1,146 @@
+---
+title: "Predicción del rating de Las aplicaciones en Google Play Store"
+subtitle: "Reto DataSource"
+author: "[Edimer (Sidereus)](https://edimer.github.io/)"
+output:
+  html_notebook:
+    toc: true
+    toc_float: 
+      smooth_scroll: false
+      collapsed: false
+    highlight: pygments
+    theme: spacelab
+    css: estilo.css
+    code_folding: show
+---
+
+<center>
+<img src = "../img/competencia.png" />
+</center>
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.align = "center")
+```
+
+- [Sitio oficial del reto en DataSource.](https://www.datasource.ai/es/home/data-science-competitions-for-startups/prediciendo-el-rating-de-las-aplicaciones-en-google-play-store)
+
+# Metodología
+
+- Las siguientes imágenes fueron tomadas del libro [Tidy Modeling with R](https://xgboost.readthedocs.io/en/latest/parameter.html) de [Max Kuhn](https://github.com/topepo) y [Julia Silge.](https://github.com/juliasilge)
+
+## Marco General
+
+<center>
+<img src = "https://www.tmwr.org/premade/data-science-model.svg" height = 450/>
+</center>
+
+## Estrategia de Validación
+
+- La siguiente imagen fue tomada de [tidymodels.org](https://www.tidymodels.org/start/case-study/) e ilustra la estrategia de evaluación de modelos que adopté.
+
+<center>
+<img src = "https://www.tidymodels.org/start/case-study/img/validation-split.svg" height = 450/>
+</center>
+
+## Fases del Modelado
+
+<center>
+<img src = "https://www.tmwr.org/premade/modeling-process.svg" height = 450/>
+</center>
+
+## Libros
+
+### *Tidy Modeling with R*
+
+<center>
+<img src = "../img/libro.PNG" height = 450/>
+</center>
+
+### *Applied Predictive Modeling*
+
+- Consultar el libro [aquí.](http://appliedpredictivemodeling.com/)
+
+<center>
+<img src = "http://static1.squarespace.com/static/51156277e4b0b8b2ffe11c00/t/51157487e4b0b8b2ffe16829/1588028705660/?format=1500w" height = 450/>
+</center>
+
+### *Feature Engineering and Selection A Practical Approach for Predictive Models*
+
+- Consultar libro [aquí.](http://www.feat.engineering/)
+
+<center>
+<img src = "https://images.routledge.com/common/jackets/amazon/978113807/9781138079229.jpg" height = 450/>
+</center>
+
+# Variables
+
+<center>
+<img src = "../img/variables.PNG" />
+</center>
+
+# Ensamble RF, XGBoost, SVM y Catboost
+
+```{r}
+library(tidyverse)
+subm3 <- read_csv("../submission/sub_03_svmR.csv") %>% 
+  rename(svmR = rating)
+
+subm6 <- read_csv("../submission/sub_06_rf.csv") %>% 
+  rename(rf = rating)
+
+subm9 <- read_csv("../submission/sub_09_xgboost.csv") %>% 
+  rename(xgb3 = rating)
+
+subm12 <- read_csv("../submission/sub_12_catboost.csv") %>% 
+  rename(catboost = rating)
+
+```
+
+- **Data con predicciones de todos los modelos:**
+
+```{r}
+subm_completa <- inner_join(subm3, subm6, by = "id") %>% 
+  inner_join(subm9, by = "id") %>% 
+  inner_join(subm12, by = "id")
+head(subm_completa)
+```
+
+
+- **Ensamble:** el resultado de la "bandera" se interpreta de la siguiente manera:
+  - Cuando el resultado es "1" todos los modelos clasificaron como "1" esa observación.
+  - Cuando el resultado es "0" todos los modelos clasificación como "0" esa observación.
+  - Cuando el resultado es "0.75" tres modelos clasificaron como "1" y un solo modelo clasificó lo contrario.
+  - Cuando el resultado es "0.25" tres modelos clasificaron como "0" y un solo modelo clasificó lo contrario.
+  - Cuando el resultado es "0.5" dos modelos clasificaron como "0" y los otros dos clasificaron como "1". En este caso opto por dejar la predicción del resultado de mayor puntaje en el tablero de la competencia, que en este caso es XGBoost.  
+
+```{r}
+subm_completa %>% 
+  mutate(bandera = svmR + rf + xgb3 + catboost,
+         promedio = bandera / 4,
+         promedio = as.character(promedio),
+         rating = if_else(promedio == "1", true = 1,
+                          false = if_else(
+                            promedio == "0", true = 0,
+                            false = if_else(
+                              promedio == "0.75", true = 1,
+                              false = if_else(
+                                promedio == "0.25", true = 0,
+                                false = xgb3
+                              )
+                            )
+                          ))) %>% 
+  select(id, rating) ->
+  sub_14_ensamble_svmRRFXGBCatboost
+head(sub_14_ensamble_svmRRFXGBCatboost)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_14_ensamble_svmRRFXGBCatboost, file = "../submission/sub_14_ensamble_svmRRFXGBCatboost.csv")
+```
+
+

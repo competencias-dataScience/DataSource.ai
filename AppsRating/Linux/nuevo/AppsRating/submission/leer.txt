@@ -1,0 +1,3 @@
+- El modelo GBM Boosting arroja todas las predicciones como 1, por tal motivo no lo agrego en la competencia.
+- El modelo LightGBM Boosting arroja todas las predicciones como 1, por tal motivo no lo agrego a la competencia.
+- Los modelos XGBoost optenidos con pycaret arrojan todas las predicciones como 1, por tal motivo no los agrego a la competencia

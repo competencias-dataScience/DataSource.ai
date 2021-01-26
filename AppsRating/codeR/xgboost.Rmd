@@ -1,0 +1,858 @@
+---
+title: "Predicción del rating de Las aplicaciones en Google Play Store"
+subtitle: "Reto DataSource"
+author: "[Edimer (Sidereus)](https://edimer.github.io/)"
+output:
+  html_notebook:
+    toc: true
+    toc_float: 
+      smooth_scroll: false
+      collapsed: false
+    highlight: pygments
+    theme: spacelab
+    css: estilo.css
+    code_folding: show
+---
+
+<center>
+<img src = "../img/competencia.png" />
+</center>
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.align = "center")
+```
+
+- [Sitio oficial del reto en DataSource.](https://www.datasource.ai/es/home/data-science-competitions-for-startups/prediciendo-el-rating-de-las-aplicaciones-en-google-play-store)
+
+# Metodología
+
+- Las siguientes imágenes fueron tomadas del libro [Tidy Modeling with R](https://xgboost.readthedocs.io/en/latest/parameter.html) de [Max Kuhn](https://github.com/topepo) y [Julia Silge.](https://github.com/juliasilge)
+
+## Marco General
+
+<center>
+<img src = "https://www.tmwr.org/premade/data-science-model.svg" height = 450/>
+</center>
+
+## Estrategia de Validación
+
+- La siguiente imagen fue tomada de [tidymodels.org](https://www.tidymodels.org/start/case-study/) e ilustra la estrategia de evaluación de modelos que adopté.
+
+<center>
+<img src = "https://www.tidymodels.org/start/case-study/img/validation-split.svg" height = 450/>
+</center>
+
+## Fases del Modelado
+
+<center>
+<img src = "https://www.tmwr.org/premade/modeling-process.svg" height = 450/>
+</center>
+
+## Libros
+
+### *Tidy Modeling with R*
+
+<center>
+<img src = "../img/libro.PNG" height = 450/>
+</center>
+
+### *Applied Predictive Modeling*
+
+- Consultar el libro [aquí.](http://appliedpredictivemodeling.com/)
+
+<center>
+<img src = "http://static1.squarespace.com/static/51156277e4b0b8b2ffe11c00/t/51157487e4b0b8b2ffe16829/1588028705660/?format=1500w" height = 450/>
+</center>
+
+### *Feature Engineering and Selection A Practical Approach for Predictive Models*
+
+- Consultar libro [aquí.](http://www.feat.engineering/)
+
+<center>
+<img src = "https://images.routledge.com/common/jackets/amazon/978113807/9781138079229.jpg" height = 450/>
+</center>
+
+
+
+# Variables
+
+<center>
+<img src = "../img/variables.PNG" />
+</center>
+
+# Datos
+
+```{r, warning=FALSE, message=FALSE}
+# Cargando datos
+library(tidyverse)
+load("../data/my_train1.Rdata")
+load("../data/my_test1.Rdata")
+sampleSub <- read_csv("../data/sample_submission.csv")
+head(new_train1)
+```
+
+- Selecciono sólo las variables que van a ingresar al análisis.
+
+```{r}
+mi_train <- new_train1 %>% 
+  select(-c(App, date_update))
+
+mi_test <- new_test1 %>% 
+  select(-c(App, date_update))
+```
+
+- Primero se garantiza que los modelos sean entrenados con las mismas variables que contiene el archivo de test (submission).
+
+```{r}
+library(fastDummies)
+# Binarización en test
+binar_train <- dummy_cols(mi_train, remove_selected_columns = TRUE)
+binar_test <- dummy_cols(mi_test, remove_selected_columns = TRUE)
+
+# Las mismas variables en train y test (submission)
+variables_iguales <- c(names(binar_train)[names(binar_train) %in% names(binar_test)],
+                       "Rating")
+
+# Datos de train finales
+binar_train <- binar_train[, variables_iguales]
+```
+
+# Modelo XGBoost
+
+- [Documentación XGBoost](https://xgboost.readthedocs.io/en/latest/)
+- [Ejemplo de xgboost con tidymodels](https://www.r-bloggers.com/2020/05/using-xgboost-with-tidymodels/)
+- [Ejemplo (youtube) de xgboost con tidymodels](https://www.youtube.com/watch?v=hpudxAmxHSM&ab_channel=JuliaSilge)
+- En este caso no voy a imputar datos ya que este algoritmo soporta y maneja valores ausentes.
+- Preprocesamiento:
+  - Binarización (previamente binarizadas). Este paso se podría obviar porque el algoritmo tiene la capacidad de definir la mejor estrategia de codificación para variables categóricas.
+  - Como es un problema de clasificación imbalanceado, utilizo la biblioteca [themis](https://github.com/tidymodels/themis) para generar clases balanceadas a través de muestreo con reemplazo.
+- Pasos a seguir con *tidymodels*:
+  - 0. División en *train*, *validación* y *test*
+  - 1. Definir preprocesamiento
+  - 2. Definir el modelo y los hiperparámetros a optimizar
+  - 3. Definir la estrategia de validación del modelo
+  - 4. Definir tipo de *tuning* (grid de hiperparámetros)
+  - 5. Definir el frujo de trabajo (*workflow* en *tidymodels*)
+  - 6. Ejecución o entrenamiento de modelos (*tuning*)
+  - 7. Evaluación de modelos (gráficos con métricas de error)
+  - 8. Ajuste del modelo final
+  - 9. Predicciones finales
+   
+# Etapas del modelo
+
+## Etapa 0 - Split
+
+```{r}
+# Preprocesamiento
+library(themis)
+library(tidymodels)
+
+# Train-Test
+set.seed(2020)
+data_split <- initial_split(data = binar_train, prop = 0.80)
+data_train <- training(data_split) %>% mutate(Rating = as.factor(Rating))
+data_test <- testing(data_split) %>% mutate(Rating = as.factor(Rating))
+```
+
+## Etapa 1 - Preprocesamiento
+
+```{r}
+# Receta
+receta1 <- recipe(Rating ~ ., data = data_train) %>%
+  step_upsample(Rating) %>%
+  prep()
+
+# Data preprocesada
+data_train_fin <- bake(receta1,
+                       new_data = data_train)
+```
+
+## Etapa 2 - Modelo XGBoost
+
+- [Hiperparámetros del modelo XGBoost](https://xgboost.readthedocs.io/en/latest/parameter.html)
+
+```{r}
+library(xgboost)
+modelo_xgb <- boost_tree(
+  mode = "classification",
+  trees = 5000,
+  mtry = tune(),
+  min_n = tune(),
+  tree_depth = tune(),
+  learn_rate = 0.01,
+  loss_reduction = tune(),
+  sample_size = tune()
+) %>%
+  set_engine("xgboost")
+```
+
+## Etapa 3 - Validación
+
+```{r}
+set.seed(1234)
+cv_config <- vfold_cv(data = data_train_fin, 
+                      v = 10,
+                      strata = Rating)
+```
+
+## Etapa 4 - Grid Tuning
+
+- En este caso voy a usar máxima entropia de tamaño 100
+
+```{r}
+set.seed(12345)
+# Hiperparámetros
+xgboost_params <- parameters(finalize(mtry(), x = data_train_fin[, -1]),
+                             min_n(),
+                             tree_depth(),
+                             loss_reduction(),
+                             sample_size = sample_prop())
+
+# Grid
+xgboost_grid <- grid_max_entropy(xgboost_params,
+                                 size = 100)
+```
+
+## Etapa 5 - *Workflow*
+
+```{r}
+xgboost_wf <- workflow() %>%
+  add_model(modelo_xgb) %>%
+  add_formula(Rating ~ .)
+```
+
+## Etapa 6 - *Tuning*
+
+- Tiempo aproximado de ejecución: 8.5 horas.
+
+```{r}
+# Tiempos
+library(tictoc)
+tic() # Tiempo 0
+
+doParallel::registerDoParallel() # Inicio Paralelización
+
+# Tuning
+xgboost_tuned <- tune_grid(
+  object = xgboost_wf,
+  resamples = cv_config,
+  grid = xgboost_grid,
+  metrics = metric_set(accuracy, f_meas, roc_auc),
+  control = control_grid(verbose = TRUE, save_pred = TRUE)
+)
+
+doParallel::stopImplicitCluster() # Fin Paralelización
+
+toc() # Tiempo final
+```
+
+## Etapa 7 - Evaluación de modelos
+
+- Se obtiene como resultado una tabla con 300 observaciones (filas). 100 por cada métrica de error.
+
+### Accuracy
+
+- **Hiperparámetros Individuales:**
+
+```{r, fig.width=9}
+xgboost_tuned %>% 
+  collect_metrics() %>% 
+  filter(.metric == "accuracy") %>% 
+  select(mtry:sample_size, mean) %>% 
+  pivot_longer(cols = -mean, names_to = "hyperpar", values_to = "value_hyper") %>% 
+  ggplot(aes(x = value_hyper, y = mean)) +
+  facet_wrap(~hyperpar, scales = "free") +
+  geom_point() +
+  geom_smooth(se = T) +
+  labs(title = "Accuracy") +
+  theme_minimal()
+```
+
+- `mtry`, `min_n` y `tree_depth`:
+
+```{r, fig.width=9}
+xgboost_tuned %>% 
+  collect_metrics() %>%  
+  filter(.metric == "accuracy") %>% 
+  ggplot(aes(x = mtry, y = min_n, size = tree_depth, color = mean)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  labs(title = "Accuracy") +
+  theme_minimal()
+```
+
+- `mtry`, `min_n` y `sample_size`:
+
+```{r, fig.width=9}
+xgboost_tuned %>% 
+  collect_metrics() %>%  
+  filter(.metric == "accuracy") %>% 
+  ggplot(aes(x = mtry, y = min_n, size = sample_size, color = mean)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  labs(title = "Accuracy") +
+  theme_minimal()
+```
+
+- `mtry`, `min_n` y `loss_reduction`:
+
+```{r, fig.width=9}
+xgboost_tuned %>% 
+  collect_metrics() %>%  
+  filter(.metric == "accuracy") %>% 
+  ggplot(aes(x = mtry, y = min_n, size = loss_reduction, color = mean)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  labs(title = "Accuracy") +
+  theme_minimal()
+```
+
+### ROC-AUC
+
+- **Hiperparámetros Individuales:**
+
+```{r, fig.width=9}
+xgboost_tuned %>% 
+  collect_metrics() %>% 
+  filter(.metric == "roc_auc") %>% 
+  select(mtry:sample_size, mean) %>% 
+  pivot_longer(cols = -mean, names_to = "hyperpar", values_to = "value_hyper") %>% 
+  ggplot(aes(x = value_hyper, y = mean)) +
+  facet_wrap(~hyperpar, scales = "free") +
+  geom_point() +
+  geom_smooth(se = T) +
+  labs(title = "ROC-AUC") +
+  theme_minimal()
+```
+
+- `mtry`, `min_n` y `tree_depth`:
+
+```{r, fig.width=9}
+xgboost_tuned %>% 
+  collect_metrics() %>%  
+  filter(.metric == "roc_auc") %>% 
+  ggplot(aes(x = mtry, y = min_n, size = tree_depth, color = mean)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  labs(title = "ROC-AUC") +
+  theme_minimal()
+```
+
+- `mtry`, `min_n` y `sample_size`:
+
+```{r, fig.width=9}
+xgboost_tuned %>% 
+  collect_metrics() %>%  
+  filter(.metric == "roc_auc") %>% 
+  ggplot(aes(x = mtry, y = min_n, size = sample_size, color = mean)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  labs(title = "ROC-AUC") +
+  theme_minimal()
+```
+
+- `mtry`, `min_n` y `loss_reduction`:
+
+```{r, fig.width=9}
+xgboost_tuned %>% 
+  collect_metrics() %>%  
+  filter(.metric == "roc_auc") %>% 
+  ggplot(aes(x = mtry, y = min_n, size = loss_reduction, color = mean)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  labs(title = "ROC-AUC") +
+  theme_minimal()
+```
+
+### F1 Score
+
+- **Hiperparámetros Individuales:**
+
+```{r, fig.width=9}
+xgboost_tuned %>% 
+  collect_metrics() %>% 
+  filter(.metric == "f_meas") %>% 
+  select(mtry:sample_size, mean) %>% 
+  pivot_longer(cols = -mean, names_to = "hyperpar", values_to = "value_hyper") %>% 
+  ggplot(aes(x = value_hyper, y = mean)) +
+  facet_wrap(~hyperpar, scales = "free") +
+  geom_point() +
+  geom_smooth(se = T) +
+  labs(title = "F1 Score") +
+  theme_minimal()
+```
+
+- `mtry`, `min_n` y `tree_depth`:
+
+```{r, fig.width=9}
+xgboost_tuned %>% 
+  collect_metrics() %>%  
+  filter(.metric == "f_meas") %>% 
+  ggplot(aes(x = mtry, y = min_n, size = tree_depth, color = mean)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  labs(title = "F1 Score") +
+  theme_minimal()
+```
+
+- `mtry`, `min_n` y `sample_size`:
+
+```{r, fig.width=9}
+xgboost_tuned %>% 
+  collect_metrics() %>%  
+  filter(.metric == "f_meas") %>% 
+  ggplot(aes(x = mtry, y = min_n, size = sample_size, color = mean)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  labs(title = "F1 Score") +
+  theme_minimal()
+```
+
+- `mtry`, `min_n` y `loss_reduction`:
+
+```{r, fig.width=9}
+xgboost_tuned %>% 
+  collect_metrics() %>%  
+  filter(.metric == "f_meas") %>% 
+  ggplot(aes(x = mtry, y = min_n, size = loss_reduction, color = mean)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  labs(title = "F1 Score") +
+  theme_minimal()
+```
+
+## Modelo Final
+
+### Accuracy
+
+- El mejor modelo basado en la métrica *accuracy* es el siguiente:
+
+```{r}
+select_best(xgboost_tuned, metric = "accuracy")
+```
+
+- **Ajustando el modelo final basado en *accuracy* **:
+
+```{r}
+mejor_tuning_accuracy <-
+  select_best(xgboost_tuned, metric = "accuracy")
+
+modelo_final_accuracy <- finalize_workflow(xgboost_wf,
+                                           parameters = mejor_tuning_accuracy)
+
+doParallel::registerDoParallel()
+
+ajuste_final_accuracy <- modelo_final_accuracy %>%
+  fit(data_train_fin)
+
+doParallel::stopImplicitCluster()
+```
+
+### ROC - AUC
+
+- El mejor modelo basado en la métrica *ROC-AUC* es el siguiente:
+
+```{r}
+select_best(xgboost_tuned, metric = "roc_auc")
+```
+
+- **Ajustando el modelo final basado en *ROC-AUC* **:
+
+```{r}
+mejor_tuning_roc_auc <-
+  select_best(xgboost_tuned, metric = "roc_auc")
+
+modelo_final_roc_auc <- finalize_workflow(xgboost_wf,
+                                           parameters = mejor_tuning_roc_auc)
+
+doParallel::registerDoParallel()
+
+ajuste_final_roc_auc <- modelo_final_roc_auc %>%
+  fit(data_train_fin)
+
+doParallel::stopImplicitCluster()
+```
+
+### F1 Score
+
+- El mejor modelo basado en la métrica *F1 Score* es el siguiente:
+
+```{r}
+select_best(xgboost_tuned, metric = "f_meas")
+```
+
+- **Ajustando el modelo final basado en *F1 Score* **:
+
+```{r}
+mejor_tuning_f1 <-
+  select_best(xgboost_tuned, metric = "f_meas")
+
+modelo_final_f1 <- finalize_workflow(xgboost_wf,
+                                     parameters = mejor_tuning_f1)
+
+doParallel::registerDoParallel()
+
+ajuste_final_f1 <- modelo_final_f1 %>%
+  fit(data_train_fin)
+
+doParallel::stopImplicitCluster()
+```
+
+## Predicciones XGBoost Accuracy
+
+### Train
+
+- **Train:**
+
+```{r}
+predichos_train_accuracy <- ajuste_final_accuracy %>%
+  predict(new_data = data_train_fin %>% select(-Rating), type = "class") %>%
+  bind_cols(data_train_fin %>%  select(Rating)) %>% 
+  mutate_all(as.factor)
+head(predichos_train_accuracy)
+```
+
+- **Matriz de confusión train:**
+
+```{r}
+predichos_train_accuracy %>%
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+- **Precisión en train:**
+
+```{r}
+predichos_train_accuracy %>%
+  metrics(Rating, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+- **F1 Score train:**
+
+```{r}
+predichos_train_accuracy %>%
+  f_meas(Rating, .pred_class) %>%
+  select(-.estimator) 
+```
+
+### Validación
+
+- **Validación:**
+
+```{r}
+# Receta en Test
+test_baked  <- bake(object = receta1, new_data = data_test)
+
+predichos_test <- ajuste_final_accuracy %>%
+  predict(new_data = test_baked %>% select(-Rating), type = "class") %>%
+  bind_cols(test_baked %>% select(Rating)) %>% 
+  mutate_all(as.factor)
+head(predichos_test)
+```
+
+- **Matriz de confusión test:**
+
+```{r}
+predichos_test %>%
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+- **Precisión en validación:**
+
+```{r}
+predichos_test %>%
+  metrics(Rating, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+- **F1 Score validación:**
+
+```{r}
+predichos_test %>%
+  f_meas(Rating, .pred_class) %>%
+  select(-.estimator) 
+```
+
+### Submission
+
+- **Modelo con todos los datos:**
+
+```{r}
+new_train <- bake(object = receta1, new_data = binar_train)
+
+doParallel::registerDoParallel()
+
+ultimo_ajuste_accuracy <- modelo_final_accuracy %>% 
+  fit(new_train)
+
+doParallel::stopImplicitCluster()
+```
+
+- **Predicciones finales:**
+
+```{r}
+predichos_final1 <- ultimo_ajuste_accuracy %>%
+  predict(new_data = binar_test, type = "class")
+
+# Submission
+sampleSub %>% 
+  select(-rating) %>% 
+  mutate(rating = predichos_final1$.pred_class) ->
+  sub_07_xgboost
+head(sub_07_xgboost)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_07_xgboost, file = "../submission/sub_07_xgboost.csv")
+```
+
+## Predicciones XGBoost ROC-AUC
+
+### Train
+
+- **Train:**
+
+```{r}
+predichos_train_roc <- ajuste_final_roc_auc %>%
+  predict(new_data = data_train_fin %>% select(-Rating), type = "class") %>%
+  bind_cols(data_train_fin %>%  select(Rating)) %>% 
+  mutate_all(as.factor)
+head(predichos_train_roc)
+```
+
+- **Matriz de confusión train:**
+
+```{r}
+predichos_train_roc %>%
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+- **Precisión en train:**
+
+```{r}
+predichos_train_roc %>%
+  metrics(Rating, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+- **F1 Score train:**
+
+```{r}
+predichos_train_roc %>%
+  f_meas(Rating, .pred_class) %>%
+  select(-.estimator) 
+```
+
+### Validación
+
+- **Validación:**
+
+```{r}
+predichos_test_roc <- ajuste_final_roc_auc %>%
+  predict(new_data = test_baked %>% select(-Rating), type = "class") %>%
+  bind_cols(test_baked %>% select(Rating)) %>% 
+  mutate_all(as.factor)
+head(predichos_test_roc )
+```
+
+- **Matriz de confusión test:**
+
+```{r}
+predichos_test_roc %>%
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+- **Precisión en validación:**
+
+```{r}
+predichos_test_roc %>%
+  metrics(Rating, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+- **F1 Score validación:**
+
+```{r}
+predichos_test_roc %>%
+  f_meas(Rating, .pred_class) %>%
+  select(-.estimator) 
+```
+
+### Submission
+
+- **Modelo con todos los datos:**
+
+```{r}
+doParallel::registerDoParallel()
+
+ultimo_ajuste_roc <- modelo_final_roc_auc %>% 
+  fit(new_train)
+
+doParallel::stopImplicitCluster()
+```
+
+- **Predicciones finales:**
+
+```{r}
+predichos_final2 <- ultimo_ajuste_roc %>%
+  predict(new_data = binar_test, type = "class")
+
+# Submission
+sampleSub %>% 
+  select(-rating) %>% 
+  mutate(rating = predichos_final2$.pred_class) ->
+  sub_08_xgboost
+head(sub_08_xgboost)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_08_xgboost, file = "../submission/sub_08_xgboost.csv")
+```
+
+## Predicciones XGBoost F1 Score
+
+### Train
+
+- **Train:**
+
+```{r}
+predichos_train_f1 <- ajuste_final_f1 %>%
+  predict(new_data = data_train_fin %>% select(-Rating), type = "class") %>%
+  bind_cols(data_train_fin %>%  select(Rating)) %>% 
+  mutate_all(as.factor)
+head(predichos_train_f1)
+```
+
+- **Matriz de confusión train:**
+
+```{r}
+predichos_train_f1 %>%
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+- **Precisión en train:**
+
+```{r}
+predichos_train_f1 %>%
+  metrics(Rating, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+- **F1 Score train:**
+
+```{r}
+predichos_train_f1 %>%
+  f_meas(Rating, .pred_class) %>%
+  select(-.estimator) 
+```
+
+### Validación
+
+- **Validación:**
+
+```{r}
+predichos_test_f1 <- ajuste_final_f1 %>%
+  predict(new_data = test_baked %>% select(-Rating), type = "class") %>%
+  bind_cols(test_baked %>% select(Rating)) %>% 
+  mutate_all(as.factor)
+head(predichos_test_f1)
+```
+
+- **Matriz de confusión test:**
+
+```{r}
+predichos_test_f1 %>%
+  conf_mat(Rating, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+- **Precisión en validación:**
+
+```{r}
+predichos_test_f1 %>%
+  metrics(Rating, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+- **F1 Score validación:**
+
+```{r}
+predichos_test_f1 %>%
+  f_meas(Rating, .pred_class) %>%
+  select(-.estimator) 
+```
+
+### Submission
+
+- **Modelo con todos los datos:**
+
+```{r}
+doParallel::registerDoParallel()
+
+ultimo_ajuste_f1 <- modelo_final_f1 %>% 
+  fit(new_train)
+
+doParallel::stopImplicitCluster()
+```
+
+- **Predicciones finales:**
+
+```{r}
+predichos_final3 <- ultimo_ajuste_f1 %>%
+  predict(new_data = binar_test, type = "class")
+
+# Submission
+sampleSub %>% 
+  select(-rating) %>% 
+  mutate(rating = predichos_final3$.pred_class) ->
+  sub_09_xgboost
+head(sub_09_xgboost)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_09_xgboost, file = "../submission/sub_09_xgboost.csv")
+```

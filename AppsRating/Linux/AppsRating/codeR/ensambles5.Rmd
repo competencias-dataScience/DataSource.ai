@@ -1,0 +1,202 @@
+---
+title: "Predicción del rating de Las aplicaciones en Google Play Store"
+subtitle: "Reto DataSource"
+author: "[Edimer (Sidereus)](https://edimer.github.io/)"
+output:
+  html_notebook:
+    toc: true
+    toc_float: 
+      smooth_scroll: false
+      collapsed: false
+    highlight: pygments
+    theme: spacelab
+    css: estilo.css
+    code_folding: show
+---
+
+<center>
+<img src = "../img/competencia.png" />
+</center>
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.align = "center")
+```
+
+- [Sitio oficial del reto en DataSource.](https://www.datasource.ai/es/home/data-science-competitions-for-startups/prediciendo-el-rating-de-las-aplicaciones-en-google-play-store)
+
+# Metodología
+
+- Las siguientes imágenes fueron tomadas del libro [Tidy Modeling with R](https://xgboost.readthedocs.io/en/latest/parameter.html) de [Max Kuhn](https://github.com/topepo) y [Julia Silge.](https://github.com/juliasilge)
+
+## Marco General
+
+<center>
+<img src = "https://www.tmwr.org/premade/data-science-model.svg" height = 450/>
+</center>
+
+## Estrategia de Validación
+
+- La siguiente imagen fue tomada de [tidymodels.org](https://www.tidymodels.org/start/case-study/) e ilustra la estrategia de evaluación de modelos que adopté.
+
+<center>
+<img src = "https://www.tmwr.org/premade/resampling.svg" height = 450/>
+</center>
+
+## Fases del Modelado
+
+<center>
+<img src = "https://www.tmwr.org/premade/modeling-process.svg" height = 450/>
+</center>
+
+## Libros
+
+### *Tidy Modeling with R*
+
+- Consultar libro [aquí](https://www.tmwr.org/)
+
+<center>
+<img src = "../img/libro.PNG" height = 450/>
+</center>
+
+### *Applied Predictive Modeling*
+
+- Consultar el libro [aquí.](http://appliedpredictivemodeling.com/)
+
+<center>
+<img src = "http://static1.squarespace.com/static/51156277e4b0b8b2ffe11c00/t/51157487e4b0b8b2ffe16829/1588028705660/?format=1500w" height = 450/>
+</center>
+
+### *Feature Engineering and Selection A Practical Approach for Predictive Models*
+
+- Consultar libro [aquí.](http://www.feat.engineering/)
+
+<center>
+<img src = "https://images.routledge.com/common/jackets/amazon/978113807/9781138079229.jpg" height = 450/>
+</center>
+
+# Variables
+
+<center>
+<img src = "../img/variables.PNG" />
+</center>
+
+# Ensamble XGBoost, SVM, Catboost-AUC y Red Neuronal
+
+```{r}
+library(tidyverse)
+subm3 <- read_csv("../submission/sub_03_svmR.csv") %>% 
+  rename(svmR = rating)
+
+subm9 <- read_csv("../submission/sub_09_xgboost.csv") %>% 
+  rename(xgb3 = rating)
+
+subm17 <- read_csv("../submission/sub_17_catboost_boosting.csv") %>% 
+  rename(catboost_auc = rating)
+
+subm43 <- read_csv("../submission/sub_43_mlp.csv") %>% 
+  rename(mlp = rating) 
+  
+```
+
+- **Data con predicciones de todos los modelos:**
+
+```{r}
+subm_completa <- inner_join(subm3, subm9, by = "id") %>% 
+  inner_join(subm17, by = "id") %>% 
+  inner_join(subm43, by = "id")
+head(subm_completa)
+```
+
+
+- **Ensamble:** el resultado de la "bandera" se interpreta de la siguiente manera:
+  - Cuando el resultado es "1" todos los modelos clasificaron como "1" esa observación.
+  - Cuando el resultado es "0" todos los modelos clasificación como "0" esa observación.
+  - Cuando el resultado es "0.75" tres modelos clasificaron como "1" y un solo modelo clasificó lo contrario.
+  - Cuando el resultado es "0.25" tres modelos clasificaron como "0" y un solo modelo clasificó lo contrario.
+  - Cuando el resultado es "0.5" dos modelos clasificaron como "0" y los otros dos clasificaron como "1". En este caso opto por dejar la predicción del resultado de mayor puntaje en el tablero de la competencia, que en este caso es MLP entrenado con R.  
+
+```{r}
+subm_completa %>% 
+  mutate(bandera = svmR + xgb3 + catboost_auc + mlp,
+         promedio = bandera / 4,
+         promedio = as.character(promedio),
+         rating = if_else(promedio == "1", true = 1,
+                          false = if_else(
+                            promedio == "0", true = 0,
+                            false = if_else(
+                              promedio == "0.75", true = 1,
+                              false = if_else(
+                                promedio == "0.25", true = 0,
+                                false = mlp
+                              )
+                            )
+                          ))) %>% 
+  select(id, rating) ->
+  sub_46_ensamble_svmR_xgbf1_catauc_mlp
+head(sub_46_ensamble_svmR_xgbf1_catauc_mlp)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_46_ensamble_svmR_xgbf1_catauc_mlp,
+          file = "../submission/sub_46_ensamble_svmR_xgbf1_catauc_mlp.csv")
+```
+
+# Ensamble SVM, Catboost-AUC y Red Neuronal
+
+- El modelo XGBoost fue ajustado con R. Arrojó mejores resultados que el ajustado con Python.
+- Random Forest entrenado con R. Este algoritmo presenta buenos resultados para clasificar el "0".
+- Catboost entrenado con Python es el de mejores resultados hasta el momento.
+
+```{r}
+subm3 <- read_csv("../submission/sub_03_svmR.csv") %>% 
+  rename(svmR = rating)
+
+subm17 <- read_csv("../submission/sub_17_catboost_boosting.csv") %>% 
+  rename(catboost_auc = rating)
+
+subm43 <- read_csv("../submission/sub_43_mlp.csv") %>% 
+  rename(mlp = rating) 
+
+```
+
+- **Data con predicciones de todos los modelos:**
+
+```{r}
+subm_completa <- inner_join(subm3, subm17, by = "id") %>% 
+  inner_join(subm43, by = "id")
+head(subm_completa)
+```
+
+
+- **Ensamble:** el resultado de la "bandera" se interpreta de la siguiente manera:
+  - Las sumas que den tres en la variable "bandera" son coincidencias en los tres modelos para la etiqueta "1".
+  - Las sumas que den cero en la variable "bandera" son coincidencias en los tres modelos para la etiqueta "0".
+  - Las sumas que den dos en la variable "bandera" son coincidencias en dos de los modelos para la etiqueta "1".
+  - Obtengo el promedio por fila. Aquellos promedios iguales a 0.6666667 les asigno la etiqueta "1" y aquellos con promedio igual a 0.3333333 les asigno la etiqueta "0". Esto lo hago asumiendo que la mayoría tienen "la razón". Si no está en ninguna de estas opciones mantengo la predicción del modelo de mayor puntaje en el tablero de la competencia, que en este caso es MLP entrenado con R.  
+
+```{r}
+subm_completa %>% 
+  mutate(bandera = svmR + catboost_auc + mlp,
+         promedio = bandera / 3,
+         promedio = as.character(promedio),
+         rating = if_else(promedio == "0.333333333333333", true = 0,
+                          false = if_else(
+                            promedio == "0.666666666666667", true = 1,
+                            false = mlp
+                          ))) %>% 
+  select(id, rating) ->
+  sub_47_ensamble_svmR_catauc_mlp
+head(sub_47_ensamble_svmR_catauc_mlp)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_47_ensamble_svmR_catauc_mlp,
+          file = "../submission/sub_47_ensamble_svmR_catauc_mlp.csv")
+```

@@ -1,0 +1,676 @@
+---
+title: "Predicción del rating de Las aplicaciones en Google Play Store"
+subtitle: "Reto DataSource"
+author: "[Edimer (Sidereus)](https://edimer.github.io/)"
+output:
+  html_notebook:
+    toc: true
+    toc_float: 
+      smooth_scroll: false
+      collapsed: false
+    highlight: pygments
+    theme: spacelab
+    css: estilo.css
+    code_folding: show
+---
+
+<center>
+<img src = "../img/competencia.png" />
+</center>
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.align = "center")
+```
+
+- [Sitio oficial del reto en DataSource.](https://www.datasource.ai/es/home/data-science-competitions-for-startups/prediciendo-el-rating-de-las-aplicaciones-en-google-play-store)
+
+# Variables
+
+<center>
+<img src = "../img/variables.PNG" />
+</center>
+
+# Notas
+
+- Todo el flujo de trabajo fue desarrollado con R. Algunos algoritmos los entrené con *Pycaret*, sin embargo, los mejores resultados fueron obtenidos con R.
+- Las bibliotecas utilizadas para los modelos de mejor desempeño fueron las siguientes:
+  - `tidyverse`: manejo, estructuración y visualización de datos. [Más información.](https://www.tidyverse.org/)
+  - `tidymodels`: entrenamiento de algoritmos de machine learning. [Más información.](https://www.tidymodels.org/)
+  - `lightgbm`: algoritmo LightGBM desde R. [Más información.](https://lightgbm.readthedocs.io/en/latest/R/index.html)
+  - `catboost`: algoritmo Catboost desde R. [Más información.](https://catboost.ai/docs/concepts/r-installation.html)
+  - `keras`: algoritmo *perceptrón multicapa* desde R. [Más información.](https://keras.rstudio.com/)
+  - `treesnip`: flujo de trabajo adaptable al *tidymodels* con `lightgbm` y `catboost`. [Más información.](https://curso-r.github.io/treesnip/index.html)
+  - `fastDummies`: para binarización de variables. [Más información.](https://cran.r-project.org/web/packages/fastDummies/fastDummies.pdf)
+  - `themis`: muestros ascendentes o descendentes para clases imbalanceadas en problemas de clasificación. [Más información.](https://www.tidyverse.org/blog/2020/02/themis-0-1-0/)
+  - `doMC`: paralelización de procesos en Linux.
+  - `parallel`: paralelización de procesos en Windows.
+- Los mejores resultados fueron obtenidos con:
+  - **LightGBM:** utilizando el punto de corte (*Threshold*) para la probabilidad igual a 0.5 y métrica *ROC-AUC* para optimización.
+  - **Catboost:** utilizando el punto de corte (*Threshold*) para la probabilidad igual a 0.4 y métrica *ROC-AUC* para optimización.
+  - **Perceptrón Multicapa:** utilizando el punto de corte (*Threshold*) para la probabilidad igual a 0.45
+  - Al final lo que hice fue ensamblar los tres resultados para obtener el modelo final (de mayor puntaje en el *leaderboard*).
+- Los modelos con `lightgbm` y `catboost` fueron ejecutados en sistema operativo Linux.
+- El modelo de *perceptrón multicapa* con *keras* a través del *tidymodels* fue ejecutado en sistema operativo Windows.
+- El preprocesamiento que llevé a cabo constaba de lo siguiente:
+  - Binarización con biblioteca `fastDummies`.
+  - Imputación de valores ausentes a través de *knn*. 
+  - Escalado y normalización para el algoritmo perceptrón multicapa.
+  - Transformación Yeo-Johnson para el algoritmo perceptón multicapa.
+  - Como es un problema de clasificación imbalanceado, utilizo la biblioteca [themis](https://github.com/tidymodels/themis) para generar clases balanceadas a través de muestreo con reemplazo (ascendnete - *upsample*).
+- Fases seguidas para cada modelo:
+  - 0. División en *train*, *validación* y *test*
+  - 1. Definir preprocesamiento
+  - 2. Definir el modelo y los hiperparámetros a optimizar
+  - 3. Definir la estrategia de validación del modelo
+  - 4. Definir tipo de *tuning* (grid de hiperparámetros). En todos utilicé máxima entropía. [Más información.](https://www.tmwr.org/grid-search.html)
+  - 5. Definir el frujo de trabajo (*workflow* en *tidymodels*)
+  - 6. Ejecución o entrenamiento de modelos (*tuning*)
+  - 7. Evaluación de modelos (gráficos con métricas de error). Las métricas de error utilizadas fueron el *F1 Score* y *ROC-AUC*.
+  - 8. Ajuste del modelo final
+  - 9. Predicciones finales
+- En total realicé 139 envíos a la plataforma, probé más de 10 algoritmos diferentes y construí más de 25 documentos *HTML* con depuración, transformación, visualización y modelación. El respaldo de todo el trabajo puede ser encontrado en [mi repositorio de Github](https://github.com/Edimer/DataSource.ai) en la carpeta *AppsRating*.  
+- En los anexos de este documento se encuentran algunos textos que me sirvieron de apoyo para la construcción de modelos, estrategias de visualización y extracción de nuevas características.
+
+# Datos Iniciales {.tabset .tabset-fade .tabset-pills}
+
+```{r, message=FALSE, warning=FALSE}
+# Train
+library(tidyverse)
+train <- read_csv("../data/train.csv") %>% 
+  mutate_if(is.character, as.factor)
+
+# Test
+test <- read_csv("../data/test.csv") %>% 
+  mutate_if(is.character, as.factor)
+
+# Sample Submission
+sampleSub <- read_csv("../data/sample_submission.csv")
+```
+
+# Feature Engineering
+
+## Depuración Inicial
+
+- La variable size está como carácter y en realidad podría ser tratada como un numéro, por tal motivo se crea una nueva variable que tiene el tamaño de la aplicación. Como están dadas en diferentes unidades (mega, kilo) se llevan a una sola unidad, en este caso a kilobytes (multiplicando las que están en megabytes [por 1024 (binario).](https://www.gbmb.org/mb-to-kb#:~:text=1%20Megabyte%20is%20equal%20to,to%201024%20kilobytes%20(binary).)).
+- El número de descargas (installs) se convierte a numérico
+- El precio de la aplicación se convierte a numérico
+- La variable *género* de la aplicación inicialmente cuenta con 107 niveles (géneros) diferentes, sin embargo, están codificados por dos descripciones separadas por punto y coma, de tal manera que muchos de estos niveles se repiten; por tal motivo separo esta variable en el **punto y coma** y sólo utilizo la primera columna resultante. En esta nueva variable unifico algunos *géneros*, por ejemplo, para la música aparecen dos: *Music* y *Muscis & Audio*, recodifico uno de los dos. Quedan 46 géneros diferentes.
+- La fecha de actualización se convierte a tipo *Date*. Primero separo las tres columnas mes, día y año *-- orden en el que vienen --* conformando tres nuevas variables, con estas tres nuevamente uno las fechas en el orden año/mes/día y se convierte a formato *Date*.
+- La versión actual de la aplicación inicialmente tiene 1947 niveles, sin embargo, la variación es alta por el número de subversiones que manejan. Por ejemplo, una app puede estar en su versión 1.1, otra podría estar en 1.1.1.0, ambas están en el nivel 1, no obstante, son niveles diferentes. En este caso voy a seperar la variable "Current ver" donde está el punto (1.1.1), dando lugar con ello a nuevas variables, la primera de ellas informará acerca de la versión de la app, sin tener en cuenta las subversiones. Esta variable es la que voy a incluir en el análisisi como "new_version" haciendo referencia a la versión de la app, con la segunda variable (seguida del punto) creo una nueva variable de nombre "new_subversion", haciendo referencia a la subversión de la app. Para la versión valores superiores a 25 (sólo el 1%) les asigno NA y para la subversión valores por encima del 50 les asigno NA (sólo el 3%).
+- La versión mínima requerida de android también la obtengo como numérica.
+- Finalmente selecciono sólo aquellas variables que van a ingresar al análisis. 
+- Elimino la fila con el nivel en *content_rating* igual a *"unrated"* (sin clasificar). Además, las tres filas que aparecen con el nivel  *"Adults only 18+"* los agrego a la etiqueta *"Mature 17+"*. Esto es con la finalidad de tener los mismo niveles en train y test.
+- **Comprobación:** todos los niveles en la base de datos *train* están en la base de datos *test*.
+
+## Nuevas variables
+
+- Aunque en la depuración inicial obtuve nuevas variables, todas están ligadas a las variables iniciales. En este apartado voy a extraer nuevas variables (variables derivadas).
+- Número de letras en el nombre de la App
+- Número de palabras en el nombre de la App
+- Obtengo la tasa (rate) entre el número de *reviews* y número de instalaciones (*installs*).
+- Obtengo la tasa (rate) entre la versión y la subversión.
+- Obtengo la tasa (rate) entre el número de *reviews* y el tamaño de la app.
+- Obtengo la tasa (rate) entre el número de instalaciones (*installs*) y el tamaño de la app.
+- Como la variable *reviews* ha resultado ser la más importante en la modelación que he hecho hasta ahora, obtengo el promedio de esta variable en las categorías y géneros de la app.
+
+## Train
+
+```{r, warning=FALSE, message=FALSE}
+train  %>% 
+  mutate(new_size = extract_numeric(Size),
+         unit_size = str_extract(Size, "[A-Z | a-z]+"),
+         size_kb = if_else(unit_size == "M", true = new_size * 1000,
+                           false = new_size),
+         new_installs = extract_numeric(Installs),
+         new_price = extract_numeric(Price)) %>% 
+  separate(Genres, into = c("new_genres", "new_genre2"), sep = ";",
+           remove = FALSE) %>% 
+  mutate(new_genres = gsub("Music & Audio", "Music", new_genres),
+         new_genres = gsub("Educational", "Education", new_genres)) %>% 
+  separate(`Last Updated`, into = c("new_month", "new_day", "new_year"), sep = " ",
+           remove = FALSE) %>% 
+  mutate(new_day = extract_numeric(new_day),
+         new_month = factor(new_month,
+                            levels = c("January", "February", "March", "April",
+                                       "May", "June", "July", "August", "September",
+                                       "October", "November", "December")),
+         new_month_num = as.integer(new_month),
+         new_year = as.numeric(new_year)) %>% 
+  unite(new_year, new_month_num, new_day, col = "date_update",
+        remove = FALSE, sep = "/") %>% 
+  mutate(date_update = as.Date(date_update, format = "%Y/%m/%d")) %>% 
+  separate(`Current Ver`, into = c("v1", "v2", "v3", "v4", "v5", "v6"), sep = "[.]",
+           remove = FALSE) %>% 
+  mutate(new_version = as.numeric(v1),
+         new_version = ifelse(new_version > 25, NA, new_version),
+         new_subversion = as.numeric(v2),
+         new_subversion = ifelse(new_subversion > 50, NA, new_subversion),
+         min_android = extract_numeric(`Android Ver`),
+         Category = Hmisc::capitalize(tolower(Category))) %>% 
+  select(-c(new_genre2, v1:v6, `Android Ver`, ID, Size, Installs, Price, 
+            Genres, `Last Updated`, `Current Ver`, new_size, unit_size,
+            new_month)) %>% 
+  rename(content_rating = `Content Rating`) %>% 
+  filter(content_rating != "Unrated") %>% 
+  mutate(content_rating = factor(content_rating,
+                                 labels = c("Mature 17+", "Everyone",
+                                            "Everyone 10+", "Mature 17+",
+                                            "Teen"))) %>% 
+  mutate(content_rating = as.character(content_rating),
+         letters_app = nchar(as.character(App)),
+         words_app = sapply(strsplit(as.character(App), " "), length),
+         rate_reviews_install = Reviews / new_installs,
+         rate_version_subversion = new_version / new_subversion,
+         rate_version_subversion = ifelse(is.infinite(rate_version_subversion), 0,
+                                          rate_version_subversion),
+         rate_reviews_size = Reviews / size_kb,
+         rate_installs_size = new_installs / size_kb) %>% 
+  group_by(Category) %>% 
+  mutate(mean_reviews_category = mean(Reviews, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  group_by(new_genres) %>% 
+  mutate(mean_reviews_genres = mean(Reviews, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  mutate_if(is.character, as.factor) %>% 
+  droplevels() ->
+  new_train1
+head(new_train1)
+```
+
+## Test
+
+```{r, warning=FALSE, message=FALSE}
+test  %>% 
+  mutate(new_size = extract_numeric(Size),
+         unit_size = str_extract(Size, "[A-Z | a-z]+"),
+         size_kb = if_else(unit_size == "M", true = new_size * 1000,
+                           false = new_size),
+         new_installs = extract_numeric(Installs),
+         new_price = extract_numeric(Price)) %>% 
+  separate(Genres, into = c("new_genres", "new_genre2"), sep = ";",
+           remove = FALSE) %>% 
+  mutate(new_genres = gsub("Music & Audio", "Music", new_genres),
+         new_genres = gsub("Educational", "Education", new_genres)) %>% 
+  separate(`Last Updated`, into = c("new_month", "new_day", "new_year"), sep = " ",
+           remove = FALSE) %>% 
+  mutate(new_day = extract_numeric(new_day),
+         new_month = factor(new_month,
+                            levels = c("January", "February", "March", "April",
+                                       "May", "June", "July", "August", "September",
+                                       "October", "November", "December")),
+         new_month_num = as.integer(new_month),
+         new_year = as.numeric(new_year)) %>% 
+  unite(new_year, new_month_num, new_day, col = "date_update",
+        remove = FALSE, sep = "/") %>% 
+  mutate(date_update = as.Date(date_update, format = "%Y/%m/%d")) %>% 
+  separate(`Current Ver`, into = c("v1", "v2", "v3", "v4", "v5", "v6"), sep = "[.]",
+           remove = FALSE) %>% 
+  mutate(new_version = as.numeric(v1),
+         new_version = ifelse(new_version > 25, NA, new_version),
+         new_subversion = as.numeric(v2),
+         new_subversion = ifelse(new_subversion > 50, NA, new_subversion),
+         min_android = extract_numeric(`Android Ver`),
+         Category = Hmisc::capitalize(tolower(Category))) %>% 
+  select(-c(new_genre2, v1:v6, `Android Ver`, ID, Size, Installs, Price, 
+            Genres, `Last Updated`, `Current Ver`, new_size, unit_size,
+            new_month)) %>% 
+  rename(content_rating = `Content Rating`) %>% 
+  mutate(content_rating = as.character(content_rating),
+         letters_app = nchar(as.character(App)),
+         words_app = sapply(strsplit(as.character(App), " "), length),
+         rate_reviews_install = Reviews / new_installs,
+         rate_version_subversion = new_version / new_subversion,
+         rate_version_subversion = ifelse(is.infinite(rate_version_subversion), 0,
+                                          rate_version_subversion),
+         rate_reviews_size = Reviews / size_kb,
+         rate_installs_size = new_installs / size_kb) %>% 
+  group_by(Category) %>% 
+  mutate(mean_reviews_category = mean(Reviews, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  group_by(new_genres) %>% 
+  mutate(mean_reviews_genres = mean(Reviews, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  mutate_if(is.character, as.factor) %>% 
+  droplevels() %>% 
+  mutate_if(is.character, as.factor) ->
+  new_test1
+head(new_test1)
+```
+
+# Modelos
+
+- **Nota:** en todos los modelos garantizo que los niveles de las variables categóricas estén presentes tanto en *train* como en *test*, con la finalidad de evitar problemas al realizar predicciones.
+
+## LightGBM
+
+```{r}
+# Bibliotecas
+library(tidymodels)
+library(treesnip)
+library(lightgbm)
+library(fastDummies)
+library(themis)
+library(doMC)
+
+# Datos para modelación
+mi_train <- new_train1 %>% 
+  select(-c(App, date_update))
+
+mi_test <- new_test1 %>% 
+  select(-c(App, date_update))
+
+# Binarización de variables
+
+# Binarización en test
+binar_train <- dummy_cols(mi_train, remove_selected_columns = TRUE)
+binar_test <- dummy_cols(mi_test, remove_selected_columns = TRUE)
+
+# Las mismas variables en train y test (submission)
+variables_iguales <- c(names(binar_train)[names(binar_train) %in% names(binar_test)],
+                       "Rating")
+
+# Datos de train finales
+binar_train <- binar_train[, variables_iguales]
+
+# Preprocesamiento
+receta1 <- recipe(Rating ~ ., data = data_train) %>%
+  step_knnimpute(all_predictors(), neighbors = 2) %>% 
+  step_upsample(Rating)
+
+# Modelo LightGBM con treesnip
+mod_lgbm <- boost_tree(
+  mode = "classification",
+  mtry = tune(),
+  trees = tune(),
+  min_n = tune(),
+  tree_depth = tune(),
+  learn_rate = tune(),
+  loss_reduction = tune(),
+  sample_size = tune()
+) %>% 
+  set_engine("lightgbm", nthread = 1)
+
+# Validación cruzada con k = 10
+set.seed(1234)
+cv_config <- vfold_cv(data = data_train, 
+                      v = 10,
+                      strata = Rating)
+
+# Tuning grid: máxima entropía de tamaño 100
+set.seed(12345)
+lgbm_params <- parameters(
+  finalize(mtry(), x = data_train[, -96]),
+  trees(),
+  min_n(),
+  tree_depth(),
+  learn_rate(),
+  loss_reduction(),
+  sample_size = sample_prop()
+)
+
+lgbm_grid <- grid_max_entropy(lgbm_params,
+                              size = 100)
+
+# Workflow Modelo LightGBM
+lgbm_wflow <- workflow() %>% 
+  add_recipe(receta1) %>% 
+  add_model(mod_lgbm)
+
+# Ajuste de modelos con tuning
+registerDoMC(cores = 1)
+lgbm_tuned <- tune_grid(
+  object = lgbm_wflow,
+  resamples = cv_config,
+  grid = lgbm_grid,
+  metrics = metric_set(roc_auc, f_meas),
+  control = control_grid(save_pred = TRUE)
+)
+
+# Mejores parámetros
+mejor_roc <- select_best(lgbm_tuned, metric = "roc_auc")
+
+# Finalizando workflow
+modelo_final1 <- finalize_workflow(
+  x = lgbm_wflow,
+  parameters = mejor_roc
+)
+
+# Finalizando modelación
+prep_final <- prep(x = receta1)
+data_final <- bake(object = prep_final, 
+                   new_data = binar_train %>% mutate(Rating = as.factor(Rating)))
+
+modelo_completo <- modelo_final1 %>% 
+  fit(data = data_final)
+
+# Receta sobre datos de test
+test_final <- bake(object = prep_final, new_data = binar_test)
+
+# Predicciones sobre test (submission)
+predichos_final <- modelo_completo %>%
+  predict(new_data = test_final, type = "class")
+
+# Submission
+sampleSub %>% 
+  select(-rating) %>% 
+  mutate(rating = predichos_final$.pred_class) ->
+  sub_103_lgbm_roc_fe1
+```
+
+## Catboost
+
+```{r}
+# Bibliotecas
+library(tidymodels)
+library(treesnip)
+library(catboost)
+library(fastDummies)
+library(themis)
+library(doMC)
+
+# Datos para modelación
+mi_train <- new_train1 %>% 
+  select(-c(App, date_update))
+
+mi_test <- new_test1 %>% 
+  select(-c(App, date_update))
+
+# Binarización de variables
+
+# Binarización en test
+binar_train <- dummy_cols(mi_train, remove_selected_columns = TRUE)
+binar_test <- dummy_cols(mi_test, remove_selected_columns = TRUE)
+
+# Las mismas variables en train y test (submission)
+variables_iguales <- c(names(binar_train)[names(binar_train) %in% names(binar_test)],
+                       "Rating")
+
+# Datos de train finales
+binar_train <- binar_train[, variables_iguales]
+
+# Preprocesamiento
+receta1 <- recipe(Rating ~ ., data = data_train) %>%
+  step_knnimpute(all_predictors(), neighbors = 2) %>% 
+  step_upsample(Rating)
+
+# Modelo Catboost
+mod_catb <- boost_tree(
+  mode = "classification",
+  mtry = tune(),
+  trees = tune(),
+  min_n = tune(),
+  tree_depth = tune(),
+  learn_rate = 0.01,
+  sample_size = tune()
+) %>% 
+  set_engine("catboost", nthread = 1)
+
+# Validación cruzada con k = 10
+set.seed(1234)
+cv_config <- vfold_cv(data = data_train, 
+                      v = 10,
+                      strata = Rating)
+
+# Tuning grid: máxima entropía de tamaño 100
+set.seed(12345)
+catb_params <- parameters(
+  finalize(mtry(), x = data_train[, -104]),
+  trees(),
+  min_n(),
+  tree_depth(range = c(4, 10)),
+  sample_size = sample_prop()
+)
+
+catb_grid <- grid_max_entropy(catb_params,
+                              size = 100)
+
+# Workflow Modelo Catboost
+catb_wflow <- workflow() %>% 
+  add_recipe(receta1) %>% 
+  add_model(mod_catb)
+
+# Ajuste de modelos con tuning
+registerDoMC(cores = 1)
+catb_tuned <- tune_grid(
+  object = catb_wflow,
+  resamples = cv_config,
+  grid = catb_grid,
+  metrics = metric_set(roc_auc, f_meas),
+  control = control_grid(save_pred = TRUE)
+)
+
+# Mejores parámetros
+mejor_roc <- select_best(catb_tuned, metric = "roc_auc")
+
+# Finalizando workflow
+modelo_final1 <- finalize_workflow(
+  x = catb_wflow,
+  parameters = mejor_roc
+)
+
+# Finalizando modelación
+prep_final <- prep(x = receta1)
+data_final <- bake(object = prep_final, 
+                   new_data = binar_train %>% mutate(Rating = as.factor(Rating)))
+
+modelo_completo <- modelo_final1 %>% 
+  fit(data = data_final)
+
+# Obtención de probabilidades
+test_final <- bake(object = prep_final, new_data = binar_test)
+predichos_final2 <- modelo_completo %>%
+  predict(new_data = test_final, type = "prob")
+
+# Clases predichas con Threshold = 0.4
+predichos_final2 %>% 
+  mutate(rating = if_else(.pred_1 > 0.40, true = "1", false = "0")) ->
+  predichos_probs3
+
+# Submission
+sampleSub %>% 
+  select(-rating) %>% 
+  mutate(rating = predichos_probs3$rating) ->
+  sub_114_catb_roc_fe1
+```
+
+## Red Neuronal (MLP)
+
+```{r}
+# Bibliotecas
+library(tidymodels)
+library(keras)
+library(fastDummies)
+library(themis)
+
+# Datos para modelación
+mi_train <- new_train1 %>% 
+  select(-c(App, date_update))
+
+mi_test <- new_test1 %>% 
+  select(-c(App, date_update))
+
+# Binarización de variables
+
+# Binarización en test
+binar_train <- dummy_cols(mi_train, remove_selected_columns = TRUE)
+binar_test <- dummy_cols(mi_test, remove_selected_columns = TRUE)
+
+# Las mismas variables en train y test (submission)
+variables_iguales <- c(names(binar_train)[names(binar_train) %in% names(binar_test)],
+                       "Rating")
+
+# Datos de train finales
+binar_train <- binar_train[, variables_iguales]
+
+# Preprocesamiento
+receta1 <- recipe(Rating ~ ., data = data_train) %>%
+  step_knnimpute(all_predictors(), neighbors = 2) %>% 
+  step_YeoJohnson(all_numeric(), -all_outcomes()) %>% 
+  step_normalize(all_numeric(), -all_outcomes()) %>% 
+  step_upsample(Rating)
+
+# Modelo Red Neuronal (MLP)
+mod_mlp <- mlp(
+  mode = "classification",
+  hidden_units = tune(),
+  dropout = tune(),
+  epochs = 100,
+  activation = tune()
+) %>% 
+  set_engine("keras")
+
+# Validación cruzada con k = 5
+set.seed(1234)
+cv_config <- vfold_cv(data = data_train, 
+                      v = 5,
+                      strata = Rating)
+
+# Tuning grid: máxima entropía de tamaño 20
+set.seed(12345)
+mlp_params <- parameters(
+  hidden_units(range = c(1, 20)),
+  dropout(),
+  activation()
+)
+
+mlp_grid <- grid_max_entropy(mlp_params,
+                             size = 20)
+
+# Workflow Modelo Red Neuronal (MLP)
+mlp_wflow <- workflow() %>% 
+  add_recipe(receta1) %>% 
+  add_model(mod_mlp)
+
+# Ajuste de modelos con tuning
+mlp_tuned <- tune_grid(
+  object = mlp_wflow,
+  resamples = cv_config,
+  grid = mlp_grid,
+  metrics = metric_set(roc_auc, f_meas),
+  control = control_grid(save_pred = TRUE)
+)
+
+# Mejores parámetros
+mejor_roc <- select_best(mlp_tuned, metric = "roc_auc")
+
+# Finalizando workflow
+modelo_final1 <- finalize_workflow(
+  x = mlp_wflow,
+  parameters = mejor_roc
+)
+
+# Finalizando modelación
+prep_final <- prep(x = receta1)
+data_final <- bake(object = prep_final, 
+                   new_data = binar_train %>% mutate(Rating = as.factor(Rating)))
+
+modelo_completo <- modelo_final1 %>% 
+  fit(data = data_final)
+
+# Obtención de probabilidades
+test_final <- bake(object = prep_final, new_data = binar_test)
+predichos_final2 <- modelo_completo %>%
+  predict(new_data = test_final, type = "prob")
+
+# Clases predichas con Threshold = 0.45
+predichos_final2 %>% 
+  mutate(rating = if_else(.pred_1 > 0.45, true = "1", false = "0")) ->
+  predichos_probs2
+
+# Submission
+sampleSub %>% 
+  select(-rating) %>% 
+  mutate(rating = predichos_probs2$rating) ->
+  sub_123_mlp_fe1
+```
+
+## Ensamble
+
+- Este fue el resultado de mayor puntaje en la competencia.
+- Ensamblo las tres predicciones previas:
+  - `sub_103_lgbm_roc_fe1`
+  - `sub_114_catb_roc_fe1`
+  - `sub_123_mlp_fe1`
+- Estos son los tres mejores modelos en el tablero de la competencia.
+- **Ensamble:** el resultado de la "bandera" se interpreta de la siguiente manera:
+  - Las sumas que den tres en la variable "bandera" son coincidencias en los tres modelos para la etiqueta "1".
+  - Las sumas que den cero en la variable "bandera" son coincidencias en los tres modelos para la etiqueta "0".
+  - Las sumas que den dos en la variable "bandera" son coincidencias en dos de los modelos para la etiqueta "1".
+  - Obtengo el promedio por fila. Aquellos promedios iguales a 0.6666667 les asigno la etiqueta "1" y aquellos con promedio igual a 0.3333333 les asigno la etiqueta "0". Esto lo hago asumiendo que la mayoría tienen "la razón". Si no está en ninguna de estas opciones mantengo la predicción de MLP-FE1 (Sub114).
+  
+```{r}
+# Tres mejores resultados
+subm103 <- sub_103_lgbm_roc_fe1 %>% rename(lgbm = rating)
+subm114 <- sub_114_catb_roc_fe1 %>% rename(catboost = rating) 
+subm123 <- sub_123_mlp_fe1 %>% rename(mlp = rating)
+
+# Ensamble
+subm_completa <- inner_join(subm103, subm114, by = "id") %>% 
+  inner_join(subm123, by = "id")
+
+subm_completa %>% 
+  mutate(bandera = lgbm + catboost + mlp,
+         promedio = bandera / 3,
+         promedio = as.character(promedio),
+         rating = if_else(promedio == "0.333333333333333", true = 0,
+                          false = if_else(
+                            promedio == "0.666666666666667", true = 1,
+                            false = mlp
+                          ))) %>% 
+  select(id, rating) ->
+  sub_126_ensamble_lgbm_catboost_mlp_fe1
+head(sub_126_ensamble_lgbm_catboost_mlp_fe1)
+```
+
+
+# Anexos
+
+## Metodología
+
+- Las siguientes imágenes fueron tomadas del libro [Tidy Modeling with R](https://xgboost.readthedocs.io/en/latest/parameter.html) de [Max Kuhn](https://github.com/topepo) y [Julia Silge.](https://github.com/juliasilge)
+
+### Marco General
+
+<center>
+<img src = "https://www.tmwr.org/premade/data-science-model.svg" height = 450/>
+</center>
+
+### Estrategia de Validación
+
+- La siguiente imagen fue tomada de [tidymodels.org](https://www.tidymodels.org/start/case-study/) e ilustra la estrategia de evaluación de modelos que adopté.
+
+<center>
+<img src = "https://www.tmwr.org/premade/resampling.svg" height = 450/>
+</center>
+
+### Fases del Modelado
+
+<center>
+<img src = "https://www.tmwr.org/premade/modeling-process.svg" height = 450/>
+</center>
+
+### Libros Guía
+
+- Consultar libro [aquí](https://www.tmwr.org/)
+
+<center>
+<img src = "../img/libro.PNG" height = 450/>
+</center>
+
+
+
+- Consultar el libro [aquí.](http://static1.squarespace.com/static/51156277e4b0b8b2ffe11c00/t/51157487e4b0b8b2ffe16829/1588028705660/?format=1500w)
+
+<center>
+<img src = "http://static1.squarespace.com/static/51156277e4b0b8b2ffe11c00/t/51157487e4b0b8b2ffe16829/1588028705660/?format=1500w" height = 450/>
+</center>
+
+
+- Consultar libro [aquí.](http://www.feat.engineering/)
+
+<center>
+<img src = "https://images.routledge.com/common/jackets/amazon/978113807/9781138079229.jpg" height = 450/>
+</center>

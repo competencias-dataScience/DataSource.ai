@@ -1,0 +1,347 @@
+---
+title: "Modelos 03: XGBoost"
+author: "[Edimer David Jaramillo (Sidereus)](https://edimer.github.io/)"
+date: "31/3/2021"
+output:
+  html_notebook:
+    toc: true
+    toc_float:
+      smooth_scroll: false
+      collapsed: false
+    theme: cosmo
+    highlight: pygments
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+<img src="https://edimer.github.io/My_Avatar2.png" style="position:absolute;top:0px;right:30px;" width = 200 />
+
+# Competencia
+
+- [Link de competencia](https://www.datasource.ai/es/home/data-science-competitions-for-startups/prediccion-de-la-intencion-de-compra-en-una-pagina-web)
+
+<center>
+<img src = "img/competencia.PNG" />
+</center>
+
+# Datos
+
+```{r}
+# Cargando datos
+library(tidyverse)
+load("data/train_final.Rdata")
+load("data/test_final.Rdata")
+sampleSub <- read_csv("data/sample.csv")
+```
+
+- Selecciono variables para análisis:
+
+```{r}
+mi_train <- train_final %>% 
+  select(-id)
+
+mi_test <- test_final %>% 
+  select(-id)
+```
+
+# Modelación
+
+```{r}
+# Preprocesamiento
+library(themis)
+library(tidymodels)
+
+# Train-Test
+set.seed(2021)
+data_split <- initial_split(data = mi_train, prop = 0.80)
+data_train <- training(data_split) %>% mutate(revenue = as.factor(revenue))
+data_test <- testing(data_split) %>% mutate(revenue = as.factor(revenue))
+
+# Preprocesamiento
+receta1 <- recipe(revenue ~ ., data = data_train) %>%
+  step_YeoJohnson(all_numeric(), -all_outcomes()) %>% 
+  step_normalize(all_numeric(), -all_outcomes()) %>% 
+  step_dummy(all_nominal(), -all_outcomes(),  one_hot = TRUE) %>% 
+  step_upsample(revenue)
+
+# Modelo
+library(xgboost)
+mod_xgb <- boost_tree(
+  mode = "classification",
+  mtry = tune(),
+  trees = tune(),
+  min_n = tune(),
+  tree_depth = tune(),
+  learn_rate = tune(),
+  loss_reduction = tune(),
+  sample_size = tune(),
+  stop_iter = 50
+) %>% 
+  set_engine("xgboost")
+
+# Validación cruzada
+set.seed(1234)
+cv_config <- vfold_cv(data = data_train, 
+                      v = 5,
+                      strata = revenue)
+
+# Grid
+set.seed(12345)
+xgb_params <- parameters(
+  finalize(mtry(), x = data_train[, -1]),
+  trees(),
+  min_n(range = c(2L, 50L)),
+  tree_depth(),
+  learn_rate(),
+  loss_reduction(),
+  sample_size = sample_prop()
+)
+
+xgb_grid <- grid_max_entropy(xgb_params,
+                             size = 30)
+
+# Flujo de trabajo
+xgb_wflow <- workflow() %>% 
+  add_recipe(receta1) %>% 
+  add_model(mod_xgb)
+
+# Tuning
+doParallel::registerDoParallel(parallel::detectCores() - 1) # Inicio Paralelización
+
+# Tuning
+xgb_tuned <- tune_grid(
+  object = xgb_wflow,
+  resamples = cv_config,
+  grid = xgb_grid,
+  metrics = metric_set(f_meas),
+  control = control_grid(save_pred = TRUE)
+)
+
+doParallel::stopImplicitCluster() # Fin Paralelización
+```
+
+# Evaluación de modelos
+
+## Métrica F1-Score
+
+```{r}
+xgb_tuned %>% 
+  collect_metrics() %>% 
+  filter(.metric == "f_meas") %>% 
+  arrange(desc(mean))
+```
+
+## Mejores hiperparámetros
+
+```{r}
+show_best(xgb_tuned, metric = "f_meas")
+```
+
+## Desemepeño hiperparámetros
+
+```{r, fig.width=8}
+xgb_tuned %>% 
+  collect_metrics() %>% 
+  filter(.metric == "f_meas") %>% 
+  select(mtry:sample_size, mean) %>% 
+  pivot_longer(cols = -mean) %>% 
+  ggplot(aes(x = value, y = mean, color = mean)) +
+  facet_wrap(~name, scales = "free") +
+  geom_point() +
+  geom_smooth(se = FALSE) +
+  scale_color_viridis_c() +
+  theme_minimal()
+```
+
+## Modelo mejores hiperparámetros
+
+```{r}
+# Mejores parámetros
+mejor_roc <- select_best(xgb_tuned, metric = "f_meas")
+
+# Finalizando workflow
+modelo_final1 <- finalize_workflow(
+  x = xgb_wflow,
+  parameters = mejor_roc
+)
+
+modelo_final1_fit <- modelo_final1 %>% 
+  fit(data = data_train)
+```
+
+## Predicciones Train
+
+```{r}
+# Clases predichas en train
+clases_train <- modelo_final1_fit %>% 
+  predict(new_data = data_train, type = "class") 
+
+# Probabilidades predichas en train
+probs_train <- modelo_final1_fit %>% 
+  predict(new_data = data_train, type = "prob")
+
+# Reales, clases predichas y probabilidades predichas
+predichos_train <- bind_cols(clases_train, probs_train) %>% 
+  mutate(real = data_train$revenue)
+```
+
+## Matriz de confusión Train
+
+```{r}
+predichos_train %>% 
+  conf_mat(real, .pred_class) %>% 
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+## Accuracy Train
+
+```{r}
+predichos_train %>% 
+  accuracy(real, .pred_class)
+```
+
+## ROC Train
+
+```{r}
+predichos_train %>%
+  roc_curve(real, .pred_0) %>%
+  autoplot() +
+  geom_text(aes(
+    x = 0.25,
+    y = 1,
+    label = paste0(
+      "AUC: ",
+      predichos_train %>%
+        roc_auc(real, .pred_0) %>%
+        pull(.estimate) %>%
+        round(digits = 4)
+    )
+  ))
+```
+
+## Predicción validación
+
+```{r}
+# Clases predichas en train
+clases_val <- modelo_final1_fit %>% 
+  predict(new_data = data_test, type = "class") 
+
+# Probabilidades predichas en train
+probs_val <- modelo_final1_fit %>% 
+  predict(new_data = data_test, type = "prob")
+
+# Reales, clases predichas y probabilidades predichas
+predichos_val <- bind_cols(clases_val, probs_val) %>% 
+  mutate(real = data_test$revenue)
+```
+
+## Matriz de Confusión validación
+
+```{r}
+predichos_val %>% 
+  conf_mat(real, .pred_class) %>% 
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(x = Prediction, y = Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), colour = "white", alpha = 1, size = 8)
+```
+
+## Accuracy validación
+
+```{r}
+predichos_val %>% 
+  accuracy(real, .pred_class)
+```
+
+## ROC validación
+
+```{r}
+predichos_val %>%
+  roc_curve(real, .pred_0) %>%
+  autoplot() +
+  geom_text(aes(
+    x = 0.25,
+    y = 1,
+    label = paste0(
+      "AUC: ",
+      predichos_val %>%
+        roc_auc(real, .pred_0) %>%
+        pull(.estimate) %>%
+        round(digits = 4)
+    )
+  ))
+```
+
+# Modelo final
+
+## Ajuste
+
+```{r}
+modelo_completo <- modelo_final1 %>% 
+  fit(data = mi_train %>% mutate(revenue = as.factor(revenue)))
+```
+
+## Importancia de variables
+
+```{r, fig.width=8, fig.height=12}
+library(vip)
+modelo_completo %>% 
+  pull_workflow_fit() %>% 
+  vi() %>% 
+  mutate(Variable = fct_reorder(Variable, Importance)) %>% 
+  ggplot(aes(x = Importance, y = Variable)) +
+  geom_col(alpha = 0.7) +
+  scale_x_continuous(expand = c(0, 0)) +
+  labs(title = "Importancia de variables") +
+  theme_minimal() +
+  theme(legend.position = "top") 
+```
+
+
+# Submission
+
+```{r}
+# Predicciones sobre test (submission)
+predichos_final <- modelo_completo %>%
+  predict(new_data = mi_test, type = "class")
+
+# Submission
+sampleSub %>% 
+  select(-revenue) %>% 
+  mutate(revenue = predichos_final$.pred_class) ->
+  sub_03
+head(sub_03)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_03, file = "submission/sub_03.csv")
+```
+
+# Probabilidades
+
+```{r}
+predichos_final2 <- modelo_completo %>%
+  predict(new_data = mi_test, type = "prob")
+
+predichos_final2 %>% 
+  pivot_longer(cols = everything()) %>% 
+  ggplot(aes(x = value, fill = name, color = name)) +
+  geom_density(alpha = 0.5)
+```
+
+- **Exportando probabilidades:**
+
+```{r}
+write_csv(predichos_final2, file = "probabilitys/prob_xgb.csv")
+```
+

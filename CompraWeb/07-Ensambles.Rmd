@@ -1,0 +1,127 @@
+---
+title: "Modelos 06: Ensambles"
+author: "[Edimer David Jaramillo (Sidereus)](https://edimer.github.io/)"
+date: "31/3/2021"
+output:
+  html_notebook:
+    toc: true
+    toc_float:
+      smooth_scroll: false
+      collapsed: false
+    theme: cosmo
+    highlight: pygments
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+<img src="https://edimer.github.io/My_Avatar2.png" style="position:absolute;top:0px;right:30px;" width = 200 />
+
+# Competencia
+
+- [Link de competencia](https://www.datasource.ai/es/home/data-science-competitions-for-startups/prediccion-de-la-intencion-de-compra-en-una-pagina-web)
+
+<center>
+<img src = "img/competencia.PNG" />
+</center>
+
+# Ensamble GLM, MLP, XGBoost y Catboost
+
+```{r}
+library(tidyverse)
+subm01 <- read_csv("submission/sub_01.csv") %>% 
+  rename(glm = revenue)
+
+subm02 <- read_csv("submission/sub_02.csv") %>% 
+  rename(mlp = revenue)
+
+subm03 <- read_csv("submission/sub_03.csv") %>% 
+  rename(xgb = revenue) 
+
+subm04 <- read_csv("submission/sub_04.csv") %>% 
+  rename(catb = revenue)  
+```
+
+- **Data con predicciones de todos los modelos:**
+
+```{r}
+subm_completa <- inner_join(subm01, subm02, by = "id") %>% 
+  inner_join(subm03, by = "id") %>% 
+  inner_join(subm04, by = "id")
+head(subm_completa)
+```
+
+- **Ensamble:** el resultado de la "bandera" se interpreta de la siguiente manera:
+  - Cuando el resultado es "1" todos los modelos clasificaron como "1" esa observación.
+  - Cuando el resultado es "0" todos los modelos clasificación como "0" esa observación.
+  - Cuando el resultado es "0.75" tres modelos clasificaron como "1" y un solo modelo clasificó lo contrario.
+  - Cuando el resultado es "0.25" tres modelos clasificaron como "0" y un solo modelo clasificó lo contrario.
+  - Cuando el resultado es "0.5" dos modelos clasificaron como "0" y los otros dos clasificaron como "1". En este caso opto por dejar la predicción del resultado de mayor puntaje en el tablero de la competencia, que en este caso es Catboost.  
+
+```{r}
+subm_completa %>% 
+  mutate(bandera = glm + mlp + xgb + catb,
+         promedio = bandera / 4,
+         promedio = as.character(promedio),
+         revenue = if_else(promedio == "1", true = 1,
+                          false = if_else(
+                            promedio == "0", true = 0,
+                            false = if_else(
+                              promedio == "0.75", true = 1,
+                              false = if_else(
+                                promedio == "0.25", true = 0,
+                                false = catb
+                              )
+                            )
+                          ))) %>% 
+  select(id, revenue) ->
+  sub_06
+head(sub_06)
+```
+
+- **Exportando predicciones:**
+
+```{r}
+write_csv(sub_06, file = "submission/sub_06.csv")
+```
+
+# Corte 0.4 catboost
+
+```{r}
+prob_catb <- read_csv("probabilitys/prob_catb.csv")
+
+prob_catb %>% 
+  mutate(id = sub_06$id,
+         revenue = ifelse(.pred_1 >= 0.40, 1, 0)) %>% 
+  select(id, revenue) ->
+  sub_07
+
+write_csv(sub_07, file = "submission/sub_07.csv")
+```
+
+# Ensamble probabilidades
+
+```{r}
+prob_catb <- read_csv("probabilitys/prob_catb.csv") %>% 
+  rename(catb1 = .pred_1)
+prob_mlp <- read_csv("probabilitys/prob_mlp.csv") %>% 
+  rename(mlp1 = .pred_1)
+prob_xgb <- read_csv("probabilitys/prob_xgb.csv") %>% 
+  rename(xgb1 = .pred_1)
+
+data.frame(
+  catb1 = prob_catb$catb1,
+  mlp1 = prob_mlp$mlp1,
+  xgb1 = prob_xgb$xgb1
+) %>% 
+  mutate(id = sub_06$id,
+         prob_revenue = (catb1 + mlp1 + xgb1) / 3,
+         revenue = ifelse(prob_revenue > 0.5, 1, 0)) %>% 
+  select(id, revenue) ->
+  sub_08
+
+write_csv(sub_08, file = "submission/sub_08.csv")  
+```
+

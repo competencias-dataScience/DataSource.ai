@@ -10,4 +10,3 @@
   - [Predicción de Retrasos de Vuelos para una Aerolínea (posición 2)](https://www.datasource.ai/es/home/competitions/prediccion-de-retrasos-de-vuelos-para-una-aerolinea)
   - [Inclusión Financiera en Latinoamérica (posición > 20)](https://www.datasource.ai/es/home/competitions/inclusion-financiera-en-latinoamerica)  
   - [Predicción De Precios De Apartamentos En Argentina y Colombia (posición 20)](https://www.datasource.ai/es/home/data-science-competitions-for-startups/prediccion-de-precios-de-apartamentos-en-argentina-y-colombia)
-
